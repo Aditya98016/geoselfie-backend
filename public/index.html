@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GeoSelfie — Smart Presence, Verified</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Inter, system-ui, sans-serif; background: #F1F5F9; color: #0F172A; }
+
+    /* Nav */
+    nav { background: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,.08); position: sticky; top: 0; z-index: 100; }
+    .logo { font-size: 24px; font-weight: 800; }
+    .logo .b { color: #1A56DB; }
+    .logo .g { color: #059669; }
+    .nav-links { display: flex; gap: 24px; }
+    .nav-links a { color: #475569; text-decoration: none; font-size: 14px; font-weight: 500; }
+    .nav-btn { background: #1A56DB; color: #fff; border: none; border-radius: 8px; padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer; text-decoration: none; }
+
+    /* Hero */
+    .hero { text-align: center; padding: 80px 24px 60px; }
+    .hero-badge { display: inline-block; background: #EBF2FF; color: #1A56DB; border: 1px solid rgba(26,86,219,.2); border-radius: 20px; padding: 6px 16px; font-size: 13px; font-weight: 600; margin-bottom: 20px; }
+    .hero h1 { font-size: 48px; font-weight: 800; line-height: 1.15; margin-bottom: 16px; letter-spacing: -1px; }
+    .hero h1 span { color: #1A56DB; }
+    .hero p { font-size: 18px; color: #475569; max-width: 560px; margin: 0 auto 32px; line-height: 1.6; }
+    .hero-btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn-primary { background: #1A56DB; color: #fff; border: none; border-radius: 12px; padding: 14px 28px; font-size: 15px; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+    .btn-secondary { background: #fff; color: #1A56DB; border: 2px solid #1A56DB; border-radius: 12px; padding: 14px 28px; font-size: 15px; font-weight: 700; cursor: pointer; text-decoration: none; }
+
+    /* Stats */
+    .stats { background: #fff; padding: 40px 24px; display: flex; justify-content: center; gap: 60px; flex-wrap: wrap; border-top: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0; }
+    .stat { text-align: center; }
+    .stat-num { font-size: 36px; font-weight: 800; color: #1A56DB; }
+    .stat-label { font-size: 13px; color: #475569; margin-top: 4px; }
+
+    /* Features */
+    .features { padding: 70px 24px; max-width: 1100px; margin: 0 auto; }
+    .section-title { text-align: center; font-size: 32px; font-weight: 800; margin-bottom: 8px; }
+    .section-sub { text-align: center; color: #475569; font-size: 16px; margin-bottom: 48px; }
+    .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .feature-card { background: #fff; border: 1px solid #E2E8F0; border-radius: 16px; padding: 24px; }
+    .feature-icon { font-size: 32px; margin-bottom: 12px; }
+    .feature-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .feature-card p { font-size: 14px; color: #475569; line-height: 1.6; }
+
+    /* How it works */
+    .how { background: #fff; padding: 70px 24px; }
+    .how-inner { max-width: 900px; margin: 0 auto; }
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; margin-top: 48px; }
+    .step { text-align: center; }
+    .step-num { width: 48px; height: 48px; border-radius: 50%; background: #1A56DB; color: #fff; font-size: 20px; font-weight: 800; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; }
+    .step h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .step p { font-size: 14px; color: #475569; line-height: 1.6; }
+
+    /* Pricing */
+    .pricing { padding: 70px 24px; max-width: 1000px; margin: 0 auto; }
+    .plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 48px; }
+    .plan { background: #fff; border: 2px solid #E2E8F0; border-radius: 16px; padding: 24px; text-align: center; position: relative; }
+    .plan.popular { border-color: #1A56DB; }
+    .popular-badge { position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: #1A56DB; color: #fff; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 12px; white-space: nowrap; }
+    .plan-name { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .plan-price { font-size: 32px; font-weight: 800; color: #1A56DB; margin-bottom: 4px; }
+    .plan-duration { font-size: 13px; color: #94A3B8; margin-bottom: 16px; }
+    .plan-features { list-style: none; text-align: left; font-size: 13px; color: #475569; line-height: 2; }
+    .plan-features li::before { content: "✓ "; color: #059669; font-weight: 700; }
+
+    /* DPDP */
+    .dpdp { background: #ECFDF5; border-top: 1px solid rgba(5,150,105,.2); border-bottom: 1px solid rgba(5,150,105,.2); padding: 40px 24px; text-align: center; }
+    .dpdp h2 { font-size: 22px; font-weight: 800; color: #059669; margin-bottom: 8px; }
+    .dpdp p { color: #475569; font-size: 14px; max-width: 600px; margin: 0 auto; line-height: 1.7; }
+    .dpdp-badges { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 20px; }
+    .dpdp-badge { background: #fff; border: 1px solid rgba(5,150,105,.3); border-radius: 20px; padding: 6px 14px; font-size: 12px; font-weight: 600; color: #059669; }
+
+    /* CTA */
+    .cta { background: linear-gradient(135deg, #1A56DB, #059669); padding: 70px 24px; text-align: center; color: #fff; }
+    .cta h2 { font-size: 36px; font-weight: 800; margin-bottom: 12px; }
+    .cta p { font-size: 16px; opacity: .85; margin-bottom: 32px; }
+    .cta-btn { background: #fff; color: #1A56DB; border: none; border-radius: 12px; padding: 14px 32px; font-size: 16px; font-weight: 800; cursor: pointer; text-decoration: none; display: inline-block; }
+
+    /* Footer */
+    footer { background: #0F172A; color: #94A3B8; padding: 40px 24px; }
+    .footer-inner { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 32px; }
+    .footer-logo { font-size: 22px; font-weight: 800; margin-bottom: 12px; }
+    .footer-logo .b { color: #60A5FA; }
+    .footer-logo .g { color: #34D399; }
+    .footer-desc { font-size: 13px; line-height: 1.7; }
+    .footer-col h4 { color: #fff; font-size: 14px; font-weight: 700; margin-bottom: 12px; }
+    .footer-col a { display: block; color: #94A3B8; text-decoration: none; font-size: 13px; margin-bottom: 8px; }
+    .footer-col a:hover { color: #fff; }
+    .footer-bottom { border-top: 1px solid rgba(255,255,255,.08); margin-top: 32px; padding-top: 20px; text-align: center; font-size: 12px; }
+
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 32px; }
+      .features-grid { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr; }
+      .plans { grid-template-columns: 1fr 1fr; }
+      .footer-inner { grid-template-columns: 1fr 1fr; }
+      .stats { gap: 32px; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <div class="logo"><span class="b">Geo</span><span class="g">Selfie</span></div>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#how">How it works</a>
+    <a href="/privacy">Privacy Policy</a>
+    <a href="/terms">Terms</a>
+  </div>
+  <a href="#download" class="nav-btn">📱 Download App</a>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-badge">🇮🇳 Made in India · DPDP Act 2023 Compliant</div>
+  <h1>Smart Attendance,<br><span>Verified by Location</span></h1>
+  <p>GeoSelfie uses GPS geofencing and live selfie verification to make attendance fraud-proof for schools and colleges.</p>
+  <div class="hero-btns">
+    <a href="#download" class="btn-primary">📱 Download for Android</a>
+    <a href="#features" class="btn-secondary">See Features</a>
+  </div>
+</section>
+
+<!-- Stats -->
+<div class="stats">
+  <div class="stat"><div class="stat-num">6</div><div class="stat-label">Indian Languages</div></div>
+  <div class="stat"><div class="stat-num">100%</div><div class="stat-label">Fake GPS Proof</div></div>
+  <div class="stat"><div class="stat-num">Mon–Sat</div><div class="stat-label">Period-wise Tracking</div></div>
+  <div class="stat"><div class="stat-num">DPDP</div><div class="stat-label">Act 2023 Compliant</div></div>
+</div>
+
+<!-- Features -->
+<section class="features" id="features">
+  <h2 class="section-title">Everything You Need</h2>
+  <p class="section-sub">Complete attendance management platform for Indian schools and colleges</p>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">📍</div>
+      <h3>Geo-Selfie Attendance</h3>
+      <p>GPS geofencing ensures students are physically on campus. Live selfie confirms identity. No proxy attendance possible.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🚫</div>
+      <h3>Anti Fake GPS</h3>
+      <p>Advanced detection prevents mock GPS apps. Accuracy, altitude and speed checks flag suspicious locations instantly.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📅</div>
+      <h3>Period-wise Tracking</h3>
+      <p>Monday to Saturday period schedule. Each period has its own attendance record and verify button for teachers.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">💬</div>
+      <h3>GeoChat</h3>
+      <p>WhatsApp-style messaging between teachers, students and parents. Group chat, file sharing, read receipts included.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">👨‍👩‍👧</div>
+      <h3>Parent Connect</h3>
+      <p>Parents get real-time attendance alerts, homework status, notices and can chat directly with teachers.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🤖</div>
+      <h3>AI Insights</h3>
+      <p>Gemini AI analyzes attendance patterns, detects at-risk students and generates smart report card comments.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📊</div>
+      <h3>Excel Reports</h3>
+      <p>Download period-wise Excel sheets and full day CSV attendance reports with one click.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📚</div>
+      <h3>Academics Module</h3>
+      <p>Homework upload, assignment submission, exam schedule, marks entry and report card generation.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🌐</div>
+      <h3>6 Indian Languages</h3>
+      <p>Full support for English, Hindi, Bengali, Marathi, Tamil and Telugu. Switch anytime from settings.</p>
+    </div>
+  </div>
+</section>
+
+<!-- How it works -->
+<section class="how" id="how">
+  <div class="how-inner">
+    <h2 class="section-title">How It Works</h2>
+    <p class="section-sub">Simple 3-step process for teachers and students</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>Teacher Sets Up</h3>
+        <p>Register, set college location on map, configure Mon–Sat period schedule. Share class code with students.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>Students Join</h3>
+        <p>Students enter class code, register with mobile number. App automatically tracks campus presence via GPS.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>Auto Attendance</h3>
+        <p>Teacher sends verify alert. Students take a selfie. Attendance marked instantly with GPS and liveness check.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing -->
+<section class="pricing" id="pricing">
+  <h2 class="section-title">Simple Pricing</h2>
+  <p class="section-sub">Teachers subscribe, students and parents always free</p>
+  <div class="plans">
+    <div class="plan">
+      <div class="plan-name">Free Trial</div>
+      <div class="plan-price">₹0</div>
+      <div class="plan-duration">30 Days</div>
+      <ul class="plan-features">
+        <li>All features included</li>
+        <li>Unlimited students</li>
+        <li>Period-wise tracking</li>
+        <li>AI insights</li>
+        <li>GeoChat</li>
+      </ul>
+    </div>
+    <div class="plan">
+      <div class="plan-name">1 Month</div>
+      <div class="plan-price">₹299</div>
+      <div class="plan-duration">30 Days</div>
+      <ul class="plan-features">
+        <li>All features included</li>
+        <li>Unlimited students</li>
+        <li>Period-wise tracking</li>
+        <li>AI insights</li>
+        <li>GeoChat</li>
+      </ul>
+    </div>
+    <div class="plan popular">
+      <div class="popular-badge">MOST POPULAR</div>
+      <div class="plan-name">3 Months</div>
+      <div class="plan-price">₹799</div>
+      <div class="plan-duration">90 Days · Save 11%</div>
+      <ul class="plan-features">
+        <li>All features included</li>
+        <li>Unlimited students</li>
+        <li>Period-wise tracking</li>
+        <li>AI insights</li>
+        <li>GeoChat</li>
+      </ul>
+    </div>
+    <div class="plan">
+      <div class="plan-name">1 Year</div>
+      <div class="plan-price">₹2499</div>
+      <div class="plan-duration">365 Days · Save 30%</div>
+      <ul class="plan-features">
+        <li>All features included</li>
+        <li>Unlimited students</li>
+        <li>Period-wise tracking</li>
+        <li>AI insights</li>
+        <li>GeoChat</li>
+      </ul>
+    </div>
+  </div>
+  <p style="text-align:center;margin-top:24px;font-size:14px;color:#059669;font-weight:600;">
+    ✓ Students & Parents always free · ✓ Cancel anytime · ✓ Secured by Razorpay
+  </p>
+</section>
+
+<!-- DPDP Compliance -->
+<section class="dpdp">
+  <h2>🔒 DPDP Act 2023 Compliant</h2>
+  <p>GeoSelfie is fully compliant with India's Digital Personal Data Protection Act 2023. Your data is secure, minimal, and never sold to third parties.</p>
+  <div class="dpdp-badges">
+    <span class="dpdp-badge">✓ Selfie deleted in 60 seconds</span>
+    <span class="dpdp-badge">✓ GPS not stored permanently</span>
+    <span class="dpdp-badge">✓ Right to erasure</span>
+    <span class="dpdp-badge">✓ Consent logged</span>
+    <span class="dpdp-badge">✓ No background tracking</span>
+    <span class="dpdp-badge">✓ Made in India 🇮🇳</span>
+  </div>
+</section>
+
+<!-- Download CTA -->
+<section class="cta" id="download">
+  <h2>Ready to Transform Attendance?</h2>
+  <p>Join schools and colleges using GeoSelfie for fraud-proof attendance</p>
+  <a href="mailto:support@geoselfie.in" class="cta-btn">📧 Contact Us to Get Started</a>
+  <p style="margin-top:16px;font-size:13px;opacity:.7">
+    Android app available · Contact us for download link
+  </p>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="footer-logo"><span class="b">Geo</span><span class="g">Selfie</span></div>
+      <p class="footer-desc">Smart attendance management platform for Indian schools and colleges. GPS verified, AI powered, DPDP compliant.</p>
+      <p style="margin-top:12px;font-size:12px;">© 2026 GeoSelfie — Geo Selfie Identity<br>All rights reserved.</p>
+    </div>
+    <div class="footer-col">
+      <h4>Product</h4>
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#how">How it works</a>
+      <a href="#download">Download</a>
+    </div>
+    <div class="footer-col">
+      <h4>Legal</h4>
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/terms">Terms & Conditions</a>
+      <a href="/privacy">DPDP Compliance</a>
+    </div>
+    <div class="footer-col">
+      <h4>Support</h4>
+      <a href="mailto:support@geoselfie.in">support@geoselfie.in</a>
+      <a href="mailto:grievance@geoselfie.in">Grievance Officer</a>
+      <a href="mailto:dpo@geoselfie.in">Data Protection Officer</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    Made with ❤️ in India · DPDP Act 2023 Compliant · Secured by Razorpay
+  </div>
+</footer>
+
+</body>
+</html>
