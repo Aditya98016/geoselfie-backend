@@ -81,26 +81,35 @@ router.post('/ping', authMiddleware, (req, res) => {
       [studentId, date, currentPeriod.period_number]
     );
 
-    if (geo.inside && time.isOpen && !time.isLunch) {
-      if (!session) {
-        const sid = uuidv4();
-        dbRun(`INSERT INTO attendance_sessions
-               (id, student_id, class_code, date, period_id, period_number, subject, entry_time, status, method)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', 'auto')`,
-          [sid, studentId, user.class_code, date,
-           currentPeriod.id, currentPeriod.period_number,
-           currentPeriod.subject, nowISO()]);
-        session = dbGet('SELECT * FROM attendance_sessions WHERE id = ?', [sid]);
-      } else if (session.status === 'absent') {
-        dbRun(`UPDATE attendance_sessions SET status='present', exit_time=NULL WHERE id=?`, [session.id]);
-      }
-      if (session?.entry_time) {
-        const mins = Math.floor((Date.now() - new Date(session.entry_time).getTime()) / 60000);
-        dbRun('UPDATE attendance_sessions SET total_minutes=? WHERE id=?', [mins, session.id]);
-      }
-    } else if (!geo.inside && session?.status === 'present') {
-      dbRun(`UPDATE attendance_sessions SET status='absent', exit_time=? WHERE id=?`, [nowISO(), session.id]);
-    }
+    // attendance.js ping route mein yeh part replace karo
+if (geo.inside && time.isOpen && !time.isLunch) {
+  if (!session) {
+    const sid = uuidv4();
+    const entryTime = nowISO();
+    dbRun(`INSERT INTO attendance_sessions
+           (id,student_id,class_code,date,period_id,period_number,
+            subject,entry_time,status,method,total_minutes)
+           VALUES (?,?,?,?,?,?,?,?,'present','auto',0)`,
+      [sid, studentId, user.class_code, date,
+       currentPeriod.id, currentPeriod.period_number,
+       currentPeriod.subject, entryTime]);
+    session = dbGet('SELECT * FROM attendance_sessions WHERE id=?', [sid]);
+  } else if (session.status === 'absent') {
+    dbRun(`UPDATE attendance_sessions
+           SET status='present', entry_time=?, exit_time=NULL, total_minutes=0
+           WHERE id=?`, [nowISO(), session.id]);
+    session = dbGet('SELECT * FROM attendance_sessions WHERE id=?', [session.id]);
+  }
+
+  // FIX: total_minutes calculate karo entry_time se
+  if (session?.entry_time) {
+    const entryMs  = new Date(session.entry_time).getTime();
+    const nowMs    = Date.now();
+    const diffMins = Math.max(0, Math.floor((nowMs - entryMs) / 60000));
+    dbRun('UPDATE attendance_sessions SET total_minutes=? WHERE id=?',
+      [diffMins, session.id]);
+  }
+}
 
     // 75% check
     const history = dbAll(

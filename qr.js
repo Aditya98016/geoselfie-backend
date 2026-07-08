@@ -13,23 +13,60 @@ const nowISO = () => new Date().toISOString();
 
 // POST /api/qr/generate — teacher QR generate karo
 router.post('/generate', authMiddleware, teacherOnly, async (req, res) => {
-  const { duration_minutes = 15 } = req.body;
-  const classCode = req.user.class_code;
-  const token     = uuidv4();
-  const expiresAt = new Date(Date.now() + duration_minutes * 60 * 1000).toISOString();
+  try {
+    const { duration_minutes = 15 } = req.body;
+    const classCode = req.user.class_code;
+    const token = uuidv4();
 
-  // Purane active QR deactivate karo
-  dbRun('UPDATE qr_sessions SET is_active = 0 WHERE class_code = ? AND is_active = 1', [classCode]);
+    // Current server time
+    const now = new Date();
 
-  const id = uuidv4();
-  dbRun(`INSERT INTO qr_sessions (id, class_code, teacher_id, qr_token, expires_at, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)`,
-    [id, classCode, req.user.id, token, expiresAt, nowISO()]);
+    // QR expiry time
+    const expiresAt = new Date(now.getTime() + duration_minutes * 60 * 1000);
+    const expiresISO = expiresAt.toISOString();
 
-  // QR code image banao
-  const qrData   = JSON.stringify({ token, classCode, expiresAt });
-  const qrImage  = await QRCode.toDataURL(qrData);
+    console.log(
+      `QR generated: now=${now.toISOString()}, expires=${expiresISO}, duration=${duration_minutes}min`
+    );
 
-  res.json({ token, qrImage, expiresAt, sessionId: id, durationMinutes: duration_minutes });
+    // Purane active QR deactivate karo
+    dbRun(
+      'UPDATE qr_sessions SET is_active = 0 WHERE class_code = ? AND is_active = 1',
+      [classCode]
+    );
+
+    const id = uuidv4();
+
+    dbRun(
+      `INSERT INTO qr_sessions
+      (id, class_code, teacher_id, qr_token, expires_at, is_active, created_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      [id, classCode, req.user.id, token, expiresISO, now.toISOString()]
+    );
+
+    const qrData = JSON.stringify({
+      token,
+      classCode,
+      expiresAt: expiresISO
+    });
+
+    const qrImage = await QRCode.toDataURL(qrData);
+
+    res.json({
+      token,
+      qrImage,
+      expiresAt: expiresISO,
+      sessionId: id,
+      durationMinutes: duration_minutes,
+      serverTime: now.toISOString()
+    });
+
+  } catch (e) {
+    console.error('QR generate error:', e);
+    res.status(500).json({
+      error: 'Internal server error'
+    });
+  }
 });
 
 // POST /api/qr/scan — student scan karta hai
@@ -43,7 +80,7 @@ router.post('/scan', authMiddleware, async (req, res) => {
   if (!qrSession)
     return res.status(400).json({ error: 'Invalid or expired QR code' });
 
-  if (new Date() > new Date(qrSession.expires_at))
+  if (Date.now() > Date.parse(qrSession.expires_at))
     return res.status(400).json({ error: 'QR code has expired' });
 
   // Already scanned?
