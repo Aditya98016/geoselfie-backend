@@ -65,6 +65,7 @@ app.use('/api/payment',       require('./payment'));
 app.use('/api/admin',         require('./admin'));
 app.use('/api/feedback',      require('./feedback'));
 app.use('/api/notifications', require('./notifications').router);
+app.use('/api/sync', require('./sync'))
 
 // Browser-friendly redirects
 app.get('/privacy', (req, res) => res.redirect('/api/privacy/policy-page'));
