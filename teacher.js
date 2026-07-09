@@ -1,203 +1,620 @@
 /*
  * © 2026 GeoSelfie — All rights reserved.
+ * COMPLETE: Excel export, period tracking, 75% warning, suspicious flags, student+parent list
  */
 const express = require('express');
-const XLSX    = require('xlsx');
+const { v4: uuidv4 } = require('uuid');
+const path    = require('path');
+const fs      = require('fs');
 const { dbGet, dbAll, dbRun } = require('./database');
 const { authMiddleware, teacherOnly } = require('./middleware');
 
 const router = express.Router();
-const today  = () => new Date().toISOString().split('T')[0];
+const nowISO = () => new Date().toISOString();
 
-async function reverseGeocode(lat, lng) {
-  try {
-    const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, { headers: { 'Accept-Language':'en', 'User-Agent':'GeoSelfie/1.0' } });
-    const data = await res.json();
-    return data.display_name || null;
-  } catch { return null; }
-}
-
-// GET /api/teacher/dashboard
+// ── Dashboard ──
 router.get('/dashboard', authMiddleware, teacherOnly, (req, res) => {
-  const date      = today();
-  const classCode = req.user.class_code;
-  const classInfo = dbGet('SELECT * FROM classes WHERE class_code = ?', [classCode]);
+  try {
+    const classCode = req.user.class_code;
+    const today     = new Date().toISOString().split('T')[0];
+    const college   = dbGet('SELECT * FROM classes WHERE class_code=?', [classCode]);
 
-  const students = dbAll(`
-    SELECT u.id, u.name, u.email, u.phone, u.roll_no, u.is_online, u.last_seen, u.unique_code, u.parent_code
-    FROM users u WHERE u.role = 'student' AND u.class_code = ? ORDER BY u.name ASC
-  `, [classCode]);
+    const students = dbAll(
+      'SELECT id FROM users WHERE class_code=? AND role=?',
+      [classCode, 'student']
+    );
+    const totalStudents = students.length;
 
-  const withStats = students.map(s => {
-    const sessions = dbAll('SELECT * FROM attendance_sessions WHERE student_id = ? AND date = ? ORDER BY period_number', [s.id, date]);
-    const history  = dbAll('SELECT status FROM attendance_sessions WHERE student_id = ? ORDER BY date DESC LIMIT 30', [s.id]);
-    const present  = history.filter(h=>h.status==='present').length;
-    const attPct   = history.length ? Math.round((present/history.length)*100) : 0;
-    const verifyLogs = dbAll('SELECT result FROM verify_logs WHERE student_id = ?', [s.id]);
-    const pass     = verifyLogs.filter(l=>l.result==='pass').length;
-    const fail     = verifyLogs.filter(l=>l.result==='fail'||l.result==='timeout').length;
+    const todaySessions = dbAll(
+      'SELECT student_id, status FROM attendance_sessions WHERE class_code=? AND date=? AND period_number=0',
+      [classCode, today]
+    );
+    const presentToday = todaySessions.filter(s => s.status === 'present').length;
 
-    return {
-      ...s,
-      today_sessions: sessions,
-      present_periods: sessions.filter(ss=>ss.status==='present').length,
-      total_periods: sessions.length,
-      overall_attendance_pct: attPct,
-      warning_75: attPct < 75 && attPct > 0,
-      verify_pass: pass, verify_fail: fail,
-      flag: fail > 0 ? 'suspicious' : (sessions.some(ss=>ss.status==='present') ? 'ok' : 'absent')
-    };
-  });
+    // Average attendance %
+    const avgData = dbAll(`
+      SELECT student_id,
+        ROUND(100.0 * SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 0) as pct
+      FROM attendance_sessions WHERE class_code=? AND period_number=0
+      GROUP BY student_id
+    `, [classCode]);
+    const avgPct = avgData.length
+      ? Math.round(avgData.reduce((s,d) => s+(d.pct||0), 0) / avgData.length)
+      : 0;
 
-  res.json({
-    date, classCode, classInfo,
-    summary: {
-      total: students.length,
-      present: withStats.filter(s=>s.present_periods>0).length,
-      absent:  withStats.filter(s=>s.present_periods===0).length,
-      suspicious: withStats.filter(s=>s.verify_fail>0).length,
-      warning_75: withStats.filter(s=>s.warning_75).length
-    },
-    students: withStats
-  });
+    // 75% Warning — students below threshold
+    const warningStudents = avgData.filter(d => (d.pct||0) < 75).length;
+
+    // Suspicious activity count
+    const suspiciousCount = dbGet(
+      'SELECT COUNT(*) as count FROM location_events WHERE event_type=? AND student_id IN (SELECT id FROM users WHERE class_code=?)',
+      ['fake_gps_attempt', classCode]
+    );
+
+    // Verify stats today
+    const verifyStats = dbAll(`
+      SELECT vl.result, COUNT(*) as count
+      FROM verify_logs vl
+      JOIN attendance_sessions s ON s.id=vl.session_id
+      WHERE s.class_code=? AND s.date=?
+      GROUP BY vl.result
+    `, [classCode, today]);
+
+    const verifiedCount = verifyStats.find(v => v.result==='verified')?.count || 0;
+    const pendingCount  = verifyStats.find(v => v.result==='pending')?.count  || 0;
+    const timeoutCount  = verifyStats.find(v => v.result==='timeout')?.count  || 0;
+
+    // Period-wise today stats
+    const periodStats = dbAll(`
+      SELECT p.period_number, p.subject, p.start_time, p.end_time,
+        COUNT(DISTINCT s.student_id) as total,
+        SUM(CASE WHEN s.status='present' THEN 1 ELSE 0 END) as present_count
+      FROM periods p
+      LEFT JOIN attendance_sessions s ON s.period_number=p.period_number AND s.class_code=p.class_code AND s.date=?
+      WHERE p.class_code=?
+      GROUP BY p.period_number
+      ORDER BY p.period_number
+    `, [today, classCode]);
+
+    res.json({
+      college,
+      stats: {
+        total_students:    totalStudents,
+        present_today:     presentToday,
+        absent_today:      totalStudents - presentToday,
+        avg_percentage:    avgPct,
+        warning_75_count:  warningStudents,
+        suspicious_count:  suspiciousCount?.count || 0,
+        verified_today:    verifiedCount,
+        pending_verify:    pendingCount,
+        timeout_verify:    timeoutCount,
+      },
+      period_stats: periodStats,
+    });
+  } catch(e) {
+    console.error('Dashboard error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// POST /api/teacher/setup-college
-router.post('/setup-college', authMiddleware, teacherOnly, async (req, res) => {
-  const { name, lat, lng, radius, start_time, lunch_start, lunch_end, end_time, address: provided } = req.body;
-  const classCode = req.user.class_code;
-  if (!lat || !lng) return res.status(400).json({ error: 'Location required' });
-  if (!name)        return res.status(400).json({ error: 'College name required' });
+// ── Setup College ──
+router.post('/setup-college', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const { college_name, address, lat, lng, radius_meters, start_time, lunch_start, lunch_end, end_time, working_days } = req.body;
 
-  let address = provided || await reverseGeocode(lat, lng);
-  dbRun(`UPDATE classes SET college_name=?, address=?, lat=?, lng=?, radius_meters=?, start_time=?, lunch_start=?, lunch_end=?, end_time=? WHERE class_code=?`,
-    [name, address, parseFloat(lat), parseFloat(lng), parseInt(radius)||200, start_time||'10:00', lunch_start||'13:00', lunch_end||'14:00', end_time||'17:00', classCode]);
+    if (!lat || !lng)
+      return res.status(400).json({ error: 'Location (lat, lng) required' });
 
-  res.json({ message: 'College setup saved!', classCode, address });
+    dbRun(`UPDATE classes SET
+           college_name=?, address=?, lat=?, lng=?, radius_meters=?,
+           start_time=?, lunch_start=?, lunch_end=?, end_time=?, working_days=?
+           WHERE class_code=?`,
+      [college_name||null, address||null,
+       parseFloat(lat), parseFloat(lng), parseInt(radius_meters)||200,
+       start_time||'10:00', lunch_start||'13:00', lunch_end||'14:00', end_time||'17:00',
+       working_days||'mon,tue,wed,thu,fri,sat',
+       req.user.class_code]);
+
+    res.json({ message: 'College setup saved!' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/teacher/students
+// ── Students with Parent Info + Attendance + Suspicious Flag ──
 router.get('/students', authMiddleware, teacherOnly, (req, res) => {
-  const students = dbAll(
-    'SELECT id, name, email, phone, roll_no, unique_code, parent_code, is_online, last_seen FROM users WHERE role = ? AND class_code = ? ORDER BY name',
-    ['student', req.user.class_code]
-  );
-  res.json({ students });
+  try {
+    const classCode = req.user.class_code;
+    const today     = new Date().toISOString().split('T')[0];
+
+    const students = dbAll(
+      'SELECT id,name,email,phone,roll_no,unique_code,parent_code,created_at FROM users WHERE class_code=? AND role=? ORDER BY name',
+      [classCode, 'student']
+    );
+
+    const enriched = students.map(stu => {
+      // Parent linking
+      let parent = null;
+      if (stu.unique_code) {
+        parent = dbGet(
+          'SELECT id,name,email,phone,unique_code FROM users WHERE parent_code=? AND role=?',
+          [stu.unique_code, 'parent']
+        );
+      }
+      if (!parent && stu.parent_code) {
+        parent = dbGet(
+          'SELECT id,name,email,phone,unique_code FROM users WHERE unique_code=? AND role=?',
+          [stu.parent_code, 'parent']
+        );
+      }
+
+      // Today status
+      const todaySes = dbGet(
+        'SELECT status, total_minutes FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',
+        [stu.id, today]
+      );
+
+      // Overall attendance % — per unique day
+      const attData = dbAll(`
+        SELECT DISTINCT date,
+          MAX(CASE WHEN status='present' THEN 1 ELSE 0 END) as was_present
+        FROM attendance_sessions WHERE student_id=? AND period_number=0
+        GROUP BY date
+      `, [stu.id]);
+      const totalDays   = attData.length;
+      const presentDays = attData.filter(d => d.was_present).length;
+      const attPct      = totalDays > 0 ? Math.round((presentDays/totalDays)*100) : 0;
+
+      // Period-wise stats
+      const periodData = dbAll(`
+        SELECT period_number, subject,
+          COUNT(*) as total,
+          SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) as present_count
+        FROM attendance_sessions WHERE student_id=? AND period_number > 0
+        GROUP BY period_number
+      `, [stu.id]);
+
+      // Suspicious activity — FIX: Suspicious Activity Flag
+      const suspicious = dbGet(
+        'SELECT COUNT(*) as count FROM location_events WHERE student_id=? AND event_type=?',
+        [stu.id, 'fake_gps_attempt']
+      );
+      const isSuspicious = (suspicious?.count || 0) > 0;
+
+      // 75% Warning flag
+      const isBelow75 = attPct < 75 && totalDays > 0;
+
+      // Pending corrections
+      const pendingCorr = dbGet(
+        'SELECT COUNT(*) as count FROM correction_requests WHERE student_id=? AND status=?',
+        [stu.id, 'pending']
+      );
+
+      return {
+        ...stu,
+        parent_linked:       !!parent,
+        parent_info:         parent || null,
+        today_status:        todaySes?.status || 'absent',
+        today_minutes:       todaySes?.total_minutes || 0,
+        attendance_pct:      attPct,
+        total_days:          totalDays,
+        present_days:        presentDays,
+        absent_days:         totalDays - presentDays,
+        is_below_75:         isBelow75,        // FIX: 75% Warning
+        is_suspicious:       isSuspicious,     // FIX: Suspicious Activity Flag
+        suspicious_count:    suspicious?.count || 0,
+        period_stats:        periodData,       // FIX: Period-wise Tracking
+        pending_corrections: pendingCorr?.count || 0,
+      };
+    });
+
+    const linkedCount    = enriched.filter(s => s.parent_linked).length;
+    const unlinkedCount  = enriched.filter(s => !s.parent_linked).length;
+    const below75Count   = enriched.filter(s => s.is_below_75).length;
+    const suspiciousCount= enriched.filter(s => s.is_suspicious).length;
+
+    res.json({
+      students: enriched,
+      summary: {
+        total:      students.length,
+        linked:     linkedCount,
+        unlinked:   unlinkedCount,
+        below_75:   below75Count,
+        suspicious: suspiciousCount,
+      }
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/teacher/student/:id
+// ── Single Student Detail ──
 router.get('/student/:id', authMiddleware, teacherOnly, (req, res) => {
-  const student = dbGet('SELECT id, name, email, phone, roll_no, unique_code, parent_code FROM users WHERE id = ?', [req.params.id]);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  const history = dbAll('SELECT date, period_number, subject, status, total_minutes, entry_time FROM attendance_sessions WHERE student_id = ? ORDER BY date DESC, period_number LIMIT 90', [req.params.id]);
-  const present = history.filter(h=>h.status==='present').length;
-  res.json({ student, history, stats: { total: history.length, present, pct: history.length ? Math.round((present/history.length)*100) : 0 } });
+  try {
+    const student = dbGet('SELECT * FROM users WHERE id=?', [req.params.id]);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    let parent = null;
+    if (student.unique_code) {
+      parent = dbGet('SELECT id,name,email,phone FROM users WHERE parent_code=? AND role=?', [student.unique_code,'parent']);
+    }
+
+    // Day-wise history
+    const dayHistory = dbAll(`
+      SELECT DISTINCT date,
+        MAX(CASE WHEN status='present' THEN 1 ELSE 0 END) as was_present,
+        SUM(total_minutes) as total_minutes,
+        MIN(entry_time) as entry_time,
+        MAX(exit_time) as exit_time
+      FROM attendance_sessions WHERE student_id=? AND period_number=0
+      GROUP BY date ORDER BY date DESC LIMIT 30
+    `, [req.params.id]);
+
+    // Period-wise history
+    const periodHistory = dbAll(`
+      SELECT s.*, p.start_time as period_start, p.end_time as period_end
+      FROM attendance_sessions s
+      LEFT JOIN periods p ON p.id=s.period_id
+      WHERE s.student_id=? AND s.period_number > 0
+      ORDER BY s.date DESC, s.period_number LIMIT 50
+    `, [req.params.id]);
+
+    const presentDays = dayHistory.filter(d => d.was_present).length;
+    const attPct      = dayHistory.length > 0 ? Math.round((presentDays/dayHistory.length)*100) : 0;
+
+    // Suspicious
+    const suspicious = dbAll(
+      'SELECT * FROM location_events WHERE student_id=? AND event_type=? ORDER BY timestamp DESC LIMIT 10',
+      [req.params.id, 'fake_gps_attempt']
+    );
+
+    // Verify logs
+    const verifyLogs = dbAll(`
+      SELECT vl.*, s.date FROM verify_logs vl
+      JOIN attendance_sessions s ON s.id=vl.session_id
+      WHERE vl.student_id=? ORDER BY vl.sent_at DESC LIMIT 20
+    `, [req.params.id]);
+
+    // Homework
+    const homework = dbAll(`
+      SELECT h.title, h.subject, h.due_date, hs.submitted_at, hs.grade
+      FROM homework h
+      LEFT JOIN homework_submissions hs ON hs.homework_id=h.id AND hs.student_id=?
+      WHERE h.class_code=? ORDER BY h.created_at DESC LIMIT 10
+    `, [req.params.id, student.class_code]);
+
+    res.json({
+      student,
+      parent_info:    parent,
+      day_history:    dayHistory,
+      period_history: periodHistory,
+      analytics: {
+        total_days:   dayHistory.length,
+        present_days: presentDays,
+        absent_days:  dayHistory.length - presentDays,
+        percentage:   attPct,
+        is_below_75:  attPct < 75,
+        is_suspicious: suspicious.length > 0,
+      },
+      suspicious_events: suspicious,
+      verify_logs:   verifyLogs,
+      homework,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/teacher/attendance-sheet — Full day CSV
+// ── Verify Stats ──
+router.get('/verify-stats/:date', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const classCode = req.user.class_code;
+    const date      = req.params.date;
+
+    // General verify
+    const general = dbAll(`
+      SELECT vl.id, vl.result, vl.sent_at, vl.responded_at, vl.subject,
+             u.name as student_name, u.roll_no
+      FROM verify_logs vl
+      JOIN users u ON u.id=vl.student_id
+      JOIN attendance_sessions s ON s.id=vl.session_id
+      WHERE s.class_code=? AND s.date=? AND vl.period_number=0
+      ORDER BY vl.sent_at DESC
+    `, [classCode, date]);
+
+    // Period-wise verify
+    const periodWise = dbAll(`
+      SELECT vl.period_number, vl.subject,
+        SUM(CASE WHEN vl.result='verified' THEN 1 ELSE 0 END) as verified,
+        SUM(CASE WHEN vl.result='pending'  THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN vl.result='timeout'  THEN 1 ELSE 0 END) as timeout,
+        COUNT(*) as total
+      FROM verify_logs vl
+      JOIN attendance_sessions s ON s.id=vl.session_id
+      WHERE s.class_code=? AND s.date=?
+      GROUP BY vl.period_number
+      ORDER BY vl.period_number
+    `, [classCode, date]);
+
+    res.json({ general, period_wise: periodWise });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── CSV Attendance Sheet ──
 router.get('/attendance-sheet', authMiddleware, teacherOnly, (req, res) => {
-  const classCode = req.user.class_code;
-  const classInfo = dbGet('SELECT * FROM classes WHERE class_code = ?', [classCode]);
-  const students  = dbAll('SELECT id, name, roll_no FROM users WHERE role = ? AND class_code = ? ORDER BY name', ['student', classCode]);
-  const sessions  = dbAll('SELECT student_id, date, status, total_minutes FROM attendance_sessions WHERE student_id IN (SELECT id FROM users WHERE class_code = ?) ORDER BY date DESC LIMIT 500', [classCode]);
-  const dates     = [...new Set(sessions.map(s=>s.date))].sort().reverse().slice(0,30);
+  try {
+    const classCode = req.user.class_code;
+    const college   = dbGet('SELECT college_name FROM classes WHERE class_code=?', [classCode]);
 
-  let csv = `GeoSelfie — Attendance Sheet\nClass: ${classCode}\nCollege: ${classInfo?.college_name||'N/A'}\n`;
-  if (classInfo?.address) csv += `Address: ${classInfo.address}\n`;
-  csv += `Generated: ${new Date().toLocaleString('en-IN')}\n© 2026 GeoSelfie — All rights reserved.\n\n`;
-  csv += `Roll No,Name,${dates.join(',')},Present,Total,Percentage\n`;
+    const students = dbAll(
+      'SELECT id,name,roll_no FROM users WHERE class_code=? AND role=? ORDER BY CAST(roll_no AS INTEGER)',
+      [classCode, 'student']
+    );
+    const dates = dbAll(`
+      SELECT DISTINCT date FROM attendance_sessions WHERE class_code=? AND period_number=0
+      ORDER BY date DESC LIMIT 30
+    `, [classCode]);
 
-  students.forEach(student => {
-    const ss  = sessions.filter(s=>s.student_id===student.id);
-    const row = [student.roll_no||'-', student.name];
-    let present = 0;
-    dates.forEach(date => {
-      const s = ss.find(x=>x.date===date);
-      if (s?.status==='present') { row.push('P'); present++; }
-      else if (s) row.push('A'); else row.push('-');
+    let csv = `GeoSelfie Attendance Report\n`;
+    csv += `College: ${college?.college_name || classCode}\n`;
+    csv += `Generated: ${new Date().toLocaleDateString('en-IN')}\n\n`;
+    csv += `Roll No,Name,${dates.map(d => d.date).join(',')},Total Days,Present,Absent,Percentage,Warning\n`;
+
+    students.forEach(stu => {
+      const row = [stu.roll_no||'', `"${stu.name||''}"`];
+      let present = 0;
+      dates.forEach(d => {
+        const att = dbGet(
+          'SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',
+          [stu.id, d.date]
+        );
+        const s = att?.status === 'present' ? 'P' : 'A';
+        if (s === 'P') present++;
+        row.push(s);
+      });
+      const total = dates.length;
+      const pct   = total > 0 ? Math.round((present/total)*100) : 0;
+      row.push(total, present, total-present, `${pct}%`, pct < 75 ? 'WARNING' : '');
+      csv += row.join(',') + '\n';
     });
-    row.push(present, dates.length, `${dates.length?Math.round((present/dates.length)*100):0}%`);
-    csv += row.join(',') + '\n';
-  });
 
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename="GeoSelfie_${classCode}_${today()}.csv"`);
-  res.send(csv);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="attendance_${classCode}_${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send('\uFEFF' + csv); // BOM for Excel
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/teacher/period-attendance-sheet — Period-wise Excel
-router.get('/period-attendance-sheet', authMiddleware, teacherOnly, (req, res) => {
-  const classCode = req.user.class_code;
-  const { date }  = req.query;
-  const targetDate = date || today();
-  const classInfo = dbGet('SELECT * FROM classes WHERE class_code = ?', [classCode]);
-  const students  = dbAll('SELECT id, name, roll_no FROM users WHERE role = ? AND class_code = ? ORDER BY name', ['student', classCode]);
-  const periods   = dbAll('SELECT * FROM periods WHERE class_code = ? ORDER BY period_number', [classCode]);
-  const sessions  = dbAll('SELECT * FROM attendance_sessions WHERE class_code = ? AND date = ? ORDER BY period_number', [classCode, targetDate]);
+// ── FIX: Excel Multi-sheet Export ──
+router.get('/period-attendance-sheet', authMiddleware, teacherOnly, async (req, res) => {
+  try {
+    const classCode = req.user.class_code;
+    const date      = req.query.date || new Date().toISOString().split('T')[0];
+    const college   = dbGet('SELECT college_name FROM classes WHERE class_code=?', [classCode]);
 
-  // Create Excel workbook
-  const wb = XLSX.utils.book_new();
+    const students = dbAll(
+      'SELECT id,name,roll_no FROM users WHERE class_code=? AND role=? ORDER BY CAST(roll_no AS INTEGER)',
+      [classCode, 'student']
+    );
+    const periods = dbAll(
+      'SELECT * FROM periods WHERE class_code=? ORDER BY day, period_number',
+      [classCode]
+    );
 
-  // Sheet 1: Period-wise attendance
-  const periodHeaders = ['Roll No', 'Student Name', ...periods.map(p=>`P${p.period_number}: ${p.subject}`), 'Total Present', 'Total Periods'];
-  const periodData    = [periodHeaders];
+    // Build multi-sheet Excel using ExcelJS
+    let ExcelJS;
+    try { ExcelJS = require('exceljs'); }
+    catch {
+      // Fallback to CSV if ExcelJS not installed
+      return res.redirect(`/api/teacher/attendance-sheet?date=${date}`);
+    }
 
-  students.forEach(student => {
-    const row = [student.roll_no||'-', student.name];
-    let presentCount = 0;
-    periods.forEach(period => {
-      const session = sessions.find(s=>s.student_id===student.id && s.period_number===period.period_number);
-      if (session?.status==='present') { row.push('P'); presentCount++; }
-      else row.push('A');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'GeoSelfie';
+
+    // ── Sheet 1: Overall Summary ──
+    const summarySheet = workbook.addWorksheet('Overall Summary', {
+      pageSetup: { orientation: 'landscape' }
     });
-    row.push(presentCount, periods.length);
-    periodData.push(row);
-  });
 
-  const ws1 = XLSX.utils.aoa_to_sheet(periodData);
-  XLSX.utils.book_append_sheet(wb, ws1, `Period-wise ${targetDate}`);
+    summarySheet.mergeCells('A1:G1');
+    summarySheet.getCell('A1').value = `${college?.college_name || 'GeoSelfie'} — Attendance Report`;
+    summarySheet.getCell('A1').font  = { size:16, bold:true, color:{ argb:'FF1A56DB' } };
 
-  // Sheet 2: Full day summary
-  const allDates   = [...new Set(dbAll('SELECT DISTINCT date FROM attendance_sessions WHERE class_code = ? ORDER BY date DESC LIMIT 30', [classCode]).map(r=>r.date))];
-  const dayHeaders = ['Roll No', 'Student Name', ...allDates, 'Present Days', 'Total Days', 'Percentage'];
-  const dayData    = [dayHeaders];
-  const allSessions= dbAll('SELECT student_id, date, status FROM attendance_sessions WHERE class_code = ? ORDER BY date DESC', [classCode]);
+    summarySheet.mergeCells('A2:G2');
+    summarySheet.getCell('A2').value = `Generated: ${new Date().toLocaleDateString('en-IN')} | Class: ${classCode}`;
+    summarySheet.getCell('A2').font  = { size:11, italic:true, color:{ argb:'FF475569' } };
 
-  students.forEach(student => {
-    const row = [student.roll_no||'-', student.name];
-    let present = 0;
-    allDates.forEach(d => {
-      const hasPresentPeriod = allSessions.some(s=>s.student_id===student.id && s.date===d && s.status==='present');
-      if (hasPresentPeriod) { row.push('P'); present++; }
-      else row.push('A');
+    summarySheet.addRow([]);
+
+    const headerRow = summarySheet.addRow(['Roll No','Student Name','Total Days','Present','Absent','Percentage','Status']);
+    headerRow.font  = { bold:true, color:{ argb:'FFFFFFFF' } };
+    headerRow.fill  = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF1A56DB' } };
+    headerRow.alignment = { horizontal:'center' };
+    summarySheet.columns = [
+      { key:'roll',    width:12 },
+      { key:'name',    width:28 },
+      { key:'total',   width:14 },
+      { key:'present', width:12 },
+      { key:'absent',  width:12 },
+      { key:'pct',     width:14 },
+      { key:'status',  width:18 },
+    ];
+
+    students.forEach(stu => {
+      const attData = dbAll(`
+        SELECT DISTINCT date,
+          MAX(CASE WHEN status='present' THEN 1 ELSE 0 END) as was_present
+        FROM attendance_sessions WHERE student_id=? AND period_number=0
+        GROUP BY date
+      `, [stu.id]);
+      const total   = attData.length;
+      const present = attData.filter(d => d.was_present).length;
+      const pct     = total > 0 ? Math.round((present/total)*100) : 0;
+
+      const row = summarySheet.addRow({
+        roll:    stu.roll_no || '',
+        name:    stu.name    || '',
+        total,
+        present,
+        absent:  total - present,
+        pct:     `${pct}%`,
+        status:  pct < 75 ? '⚠ BELOW 75%' : '✓ OK',
+      });
+
+      // FIX: 75% Warning — red highlight
+      if (pct < 75) {
+        row.getCell('status').fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF2F2' } };
+        row.getCell('status').font = { bold:true, color:{ argb:'FFDC2626' } };
+        row.getCell('pct').font    = { bold:true, color:{ argb:'FFDC2626' } };
+      } else {
+        row.getCell('status').font = { color:{ argb:'FF059669' } };
+      }
+      row.alignment = { horizontal:'center' };
     });
-    const pct = allDates.length ? Math.round((present/allDates.length)*100) : 0;
-    row.push(present, allDates.length, `${pct}%`);
-    dayData.push(row);
-  });
 
-  const ws2 = XLSX.utils.aoa_to_sheet(dayData);
-  XLSX.utils.book_append_sheet(wb, ws2, 'Daily Summary');
+    // ── Sheet 2: Day-wise Attendance ──
+    const dates = dbAll(`
+      SELECT DISTINCT date FROM attendance_sessions WHERE class_code=? AND period_number=0
+      ORDER BY date DESC LIMIT 30
+    `, [classCode]);
 
-  // Sheet 3: Info
-  const infoData = [
-    ['GeoSelfie — Attendance Report'],
-    ['Class Code', classCode],
-    ['College', classInfo?.college_name||'N/A'],
-    ['Address', classInfo?.address||'N/A'],
-    ['Schedule', `${classInfo?.start_time||'10:00'} - ${classInfo?.end_time||'17:00'}`],
-    ['Lunch', `${classInfo?.lunch_start||'13:00'} - ${classInfo?.lunch_end||'14:00'}`],
-    ['Generated', new Date().toLocaleString('en-IN')],
-    ['', ''],
-    ['© 2026 GeoSelfie — Geo Selfie Identity — All rights reserved.'],
-  ];
-  const ws3 = XLSX.utils.aoa_to_sheet(infoData);
-  XLSX.utils.book_append_sheet(wb, ws3, 'Info');
+    const daySheet = workbook.addWorksheet('Day-wise');
+    daySheet.addRow(['Roll No', 'Name', ...dates.map(d => d.date), 'Total', 'Present', '%']);
 
-  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="GeoSelfie_${classCode}_${targetDate}.xlsx"`);
-  res.send(buffer);
+    const dayHeaderRow = daySheet.getRow(1);
+    dayHeaderRow.font = { bold:true, color:{ argb:'FFFFFFFF' } };
+    dayHeaderRow.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF059669' } };
+
+    students.forEach(stu => {
+      const row = [stu.roll_no||'', stu.name||''];
+      let present = 0;
+      dates.forEach(d => {
+        const att = dbGet(
+          'SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',
+          [stu.id, d.date]
+        );
+        const s = att?.status === 'present' ? 'P' : 'A';
+        if (s === 'P') present++;
+        row.push(s);
+      });
+      const total = dates.length;
+      const pct   = total > 0 ? Math.round((present/total)*100) : 0;
+      row.push(total, present, `${pct}%`);
+      const addedRow = daySheet.addRow(row);
+
+      // Color P/A cells
+      dates.forEach((d, i) => {
+        const cell  = addedRow.getCell(3 + i);
+        const isPres = cell.value === 'P';
+        cell.fill   = { type:'pattern', pattern:'solid', fgColor:{ argb: isPres ? 'FFECFDF5' : 'FFFEF2F2' } };
+        cell.font   = { bold:true, color:{ argb: isPres ? 'FF059669' : 'FFDC2626' } };
+        cell.alignment = { horizontal:'center' };
+      });
+    });
+
+    // ── Sheet 3: FIX: Period-wise Tracking ──
+    const dayNames = ['mon','tue','wed','thu','fri','sat'];
+    for (const day of dayNames) {
+      const dayPeriods = periods.filter(p => p.day === day);
+      if (!dayPeriods.length) continue;
+
+      const dayLabel = { mon:'Monday', tue:'Tuesday', wed:'Wednesday', thu:'Thursday', fri:'Friday', sat:'Saturday' }[day];
+      const pSheet   = workbook.addWorksheet(`Periods-${dayLabel}`);
+
+      // Header
+      pSheet.addRow([`Period-wise Attendance — ${dayLabel}`]);
+      pSheet.getRow(1).font = { bold:true, size:13, color:{ argb:'FF1A56DB' } };
+      pSheet.addRow([]);
+
+      const periodHeaders = ['Roll No', 'Name', ...dayPeriods.map(p => `P${p.period_number}-${p.subject}`)];
+      pSheet.addRow(periodHeaders);
+      const pHeaderRow = pSheet.getRow(3);
+      pHeaderRow.font  = { bold:true, color:{ argb:'FFFFFFFF' } };
+      pHeaderRow.fill  = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF7C3AED' } };
+
+      students.forEach(stu => {
+        const row = [stu.roll_no||'', stu.name||''];
+        dayPeriods.forEach(p => {
+          // All records for this student + period
+          const recs = dbAll(
+            `SELECT status FROM attendance_sessions WHERE student_id=? AND period_number=? ORDER BY date DESC LIMIT 1`,
+            [stu.id, p.period_number]
+          );
+          const latest = recs[0]?.status;
+          row.push(latest === 'present' ? 'P' : latest === 'absent' ? 'A' : '-');
+        });
+        const addedRow = pSheet.addRow(row);
+        dayPeriods.forEach((p, i) => {
+          const cell  = addedRow.getCell(3 + i);
+          cell.fill   = { type:'pattern', pattern:'solid', fgColor:{ argb: cell.value==='P'?'FFECFDF5': cell.value==='-'?'FFF8FAFC':'FFFEF2F2' } };
+          cell.font   = { color:{ argb: cell.value==='P'?'FF059669':'FFDC2626' } };
+          cell.alignment = { horizontal:'center' };
+        });
+      });
+
+      pSheet.columns = [
+        { width:12 }, { width:25 },
+        ...dayPeriods.map(() => ({ width:18 }))
+      ];
+    }
+
+    // ── Sheet 4: FIX: Suspicious Activity Report ──
+    const suspSheet = workbook.addWorksheet('Suspicious Activity');
+    suspSheet.addRow(['Suspicious Activity Report']);
+    suspSheet.getRow(1).font = { bold:true, size:13, color:{ argb:'FFDC2626' } };
+    suspSheet.addRow([]);
+    suspSheet.addRow(['Roll No', 'Student Name', 'Attempts', 'Last Attempt', 'Risk Level']);
+    const suspHeaderRow = suspSheet.getRow(3);
+    suspHeaderRow.font  = { bold:true, color:{ argb:'FFFFFFFF' } };
+    suspHeaderRow.fill  = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFDC2626' } };
+
+    students.forEach(stu => {
+      const attempts = dbGet(
+        'SELECT COUNT(*) as count, MAX(timestamp) as last FROM location_events WHERE student_id=? AND event_type=?',
+        [stu.id, 'fake_gps_attempt']
+      );
+      if (!attempts?.count) return;
+
+      const risk = attempts.count > 5 ? 'HIGH' : attempts.count > 2 ? 'MEDIUM' : 'LOW';
+      const row  = suspSheet.addRow([
+        stu.roll_no||'', stu.name||'', attempts.count,
+        attempts.last ? new Date(attempts.last).toLocaleString('en-IN') : '',
+        risk
+      ]);
+      const colors = { HIGH:'FFDC2626', MEDIUM:'FFD97706', LOW:'FF1A56DB' };
+      row.getCell(5).font = { bold:true, color:{ argb: colors[risk] } };
+    });
+
+    // ── Sheet 5: 75% Warning List ──
+    const warnSheet = workbook.addWorksheet('Below 75% Warning');
+    warnSheet.addRow(['Students Below 75% Attendance — Action Required']);
+    warnSheet.getRow(1).font = { bold:true, size:13, color:{ argb:'FFD97706' } };
+    warnSheet.addRow([]);
+    warnSheet.addRow(['Roll No', 'Name', 'Email', 'Phone', 'Total Days', 'Present', 'Percentage', 'Action Needed']);
+    const warnHeaderRow = warnSheet.getRow(3);
+    warnHeaderRow.font  = { bold:true, color:{ argb:'FFFFFFFF' } };
+    warnHeaderRow.fill  = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD97706' } };
+
+    students.forEach(stu => {
+      const attData = dbAll(`
+        SELECT DISTINCT date, MAX(CASE WHEN status='present' THEN 1 ELSE 0 END) as was_present
+        FROM attendance_sessions WHERE student_id=? AND period_number=0 GROUP BY date
+      `, [stu.id]);
+      const total   = attData.length;
+      const present = attData.filter(d => d.was_present).length;
+      const pct     = total > 0 ? Math.round((present/total)*100) : 0;
+      if (pct >= 75 || total === 0) return;
+
+      const row = warnSheet.addRow([
+        stu.roll_no||'', stu.name||'', stu.email||'', stu.phone||'',
+        total, present, `${pct}%`, 'CONTACT PARENT IMMEDIATELY'
+      ]);
+      row.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF9C3' } };
+    });
+
+    // Send Excel
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="GeoSelfie_${classCode}_${date}.xlsx"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch(e) {
+    console.error('Excel export error:', e.message);
+    res.status(500).json({ error: 'Excel export failed: ' + e.message });
+  }
 });
 
 module.exports = router;

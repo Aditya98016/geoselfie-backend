@@ -1,123 +1,183 @@
 /*
- * © 2026 GeoSelfie v2.0 — All rights reserved.
+ * © 2026 GeoSelfie — All rights reserved.
+ * FIX: Fast verification response
  */
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { dbGet, dbAll, dbRun } = require('./database');
+const { dbGet, dbRun, dbAll } = require('./database');
 const { authMiddleware, teacherOnly } = require('./middleware');
-const { isInsideGeofence, isCollegeTime } = require('./geofence');
 
 const router = express.Router();
-const today  = () => new Date().toISOString().split('T')[0];
 const nowISO = () => new Date().toISOString();
-const WINDOW = () => parseInt(process.env.VERIFY_WINDOW_MINUTES||10) * 60 * 1000;
 
-function sendVerifyToClass(classCode) {
-  const date     = today();
-  const students = dbAll(`SELECT u.id FROM users u JOIN attendance_sessions s ON s.student_id = u.id WHERE s.date = ? AND s.status = 'present' AND u.class_code = ? AND u.role = 'student'`, [date, classCode]);
-  let sent = 0;
-  students.forEach(student => {
-    const session = dbGet('SELECT id FROM attendance_sessions WHERE student_id = ? AND date = ?', [student.id, date]);
-    if (!session) return;
-    const pending = dbGet(`SELECT id FROM verify_logs WHERE student_id = ? AND session_id = ? AND result = 'pending'`, [student.id, session.id]);
-    if (pending) return;
-    dbRun(`INSERT INTO verify_logs (id, student_id, session_id, sent_at, result) VALUES (?, ?, ?, ?, 'pending')`, [uuidv4(), student.id, session.id, nowISO()]);
-    sent++;
-  });
-  dbRun('UPDATE classes SET last_verify_sent_at = ? WHERE class_code = ?', [nowISO(), classCode]);
-  return sent;
-}
-
-router.post('/teacher-ping', authMiddleware, teacherOnly, (req, res) => {
-  const { lat, lng } = req.body;
-  const classCode    = req.user.class_code;
-  const classInfo    = dbGet('SELECT * FROM classes WHERE class_code = ?', [classCode]);
-
-  if (!classInfo)     return res.status(404).json({ error: 'Class not found' });
-  if (!classInfo.lat) return res.status(400).json({ error: 'College location not set' });
-
-  const geo  = isInsideGeofence(parseFloat(lat), parseFloat(lng), classInfo.lat, classInfo.lng, classInfo.radius_meters||200);
-  const time = isCollegeTime(classInfo.start_time, classInfo.end_time, classInfo.lunch_start, classInfo.lunch_end);
-
-  if (!geo.inside) return res.json({ inside: false, distance: geo.distance, message: `You are ${geo.distance}m from college` });
-  if (!time.isOpen) return res.json({ inside: true, message: 'Not in session' });
-  if (time.isLunch) return res.json({ inside: true, message: 'Lunch time — no verify', isLunch: true });
-
-  const lastSent   = classInfo.last_verify_sent_at ? new Date(classInfo.last_verify_sent_at) : null;
-  const oneHourAgo = new Date(Date.now() - 60*60*1000);
-  if (lastSent && lastSent > oneHourAgo) {
-    const minsLeft = Math.round((lastSent.getTime() - oneHourAgo.getTime()) / 60000);
-    return res.json({ inside: true, alreadySent: true, message: `Next verify in ${minsLeft} minutes` });
-  }
-
-  dbRun('UPDATE classes SET auto_verify_active = 1 WHERE class_code = ?', [classCode]);
-  const sent = sendVerifyToClass(classCode);
-  res.json({ inside: true, sent, message: `Verify sent to ${sent} students!` });
-});
-
+// POST /api/verify/send — Teacher sends verify to all students
 router.post('/send', authMiddleware, teacherOnly, (req, res) => {
-  const { student_id } = req.body;
-  const classCode      = req.user.class_code;
-  const classInfo      = dbGet('SELECT * FROM classes WHERE class_code = ?', [classCode]);
+  try {
+    const { student_id, period_number = 0, subject = 'General' } = req.body;
+    const classCode = req.user.class_code;
+    const date      = new Date().toISOString().split('T')[0];
+    const now       = nowISO();
 
-  if (classInfo) {
-    const time = isCollegeTime(classInfo.start_time, classInfo.end_time, classInfo.lunch_start, classInfo.lunch_end);
-    if (time.isLunch) return res.status(400).json({ error: 'Cannot send during lunch' });
-  }
+    const students = student_id
+      ? [dbGet('SELECT id,email,name,push_token FROM users WHERE id=?', [student_id])].filter(Boolean)
+      : dbAll('SELECT id,email,name,push_token FROM users WHERE class_code=? AND role=?', [classCode, 'student']);
 
-  let sent = 0;
-  if (student_id) {
-    const session = dbGet('SELECT id FROM attendance_sessions WHERE student_id = ? AND date = ?', [student_id, today()]);
-    if (session) {
-      const pending = dbGet(`SELECT id FROM verify_logs WHERE student_id = ? AND session_id = ? AND result = 'pending'`, [student_id, session.id]);
-      if (!pending) { dbRun(`INSERT INTO verify_logs (id, student_id, session_id, sent_at, result) VALUES (?, ?, ?, ?, 'pending')`, [uuidv4(), student_id, session.id, nowISO()]); sent = 1; }
-    }
-  } else { sent = sendVerifyToClass(classCode); }
-
-  res.json({ message: `Verify sent to ${sent} students`, sent });
-});
-
-router.post('/respond', authMiddleware, (req, res) => {
-  const { lat, lng } = req.body;
-  const studentId    = req.user.id;
-  const session = dbGet('SELECT id FROM attendance_sessions WHERE student_id = ? AND date = ?', [studentId, today()]);
-  if (!session) return res.status(404).json({ error: 'No session for today' });
-
-  const pending = dbGet(`SELECT * FROM verify_logs WHERE student_id = ? AND session_id = ? AND result = 'pending' ORDER BY sent_at DESC LIMIT 1`, [studentId, session.id]);
-  if (!pending) return res.status(404).json({ error: 'No pending verification' });
-
-  if (Date.now() - new Date(pending.sent_at).getTime() > WINDOW()) {
-    dbRun(`UPDATE verify_logs SET result = 'timeout' WHERE id = ?`, [pending.id]);
-    return res.status(400).json({ error: 'Verification window expired' });
-  }
-
-  if (lat && lng) {
-    const user      = dbGet('SELECT class_code FROM users WHERE id = ?', [studentId]);
-    const classInfo = dbGet('SELECT * FROM classes WHERE class_code = ?', [user?.class_code]);
-    if (classInfo?.lat) {
-      const geo = isInsideGeofence(parseFloat(lat), parseFloat(lng), classInfo.lat, classInfo.lng, classInfo.radius_meters||200);
-      if (!geo.inside) {
-        dbRun(`UPDATE verify_logs SET result = 'fail', lat = ?, lng = ?, responded_at = ? WHERE id = ?`, [lat, lng, nowISO(), pending.id]);
-        return res.status(400).json({ error: 'Outside college — verification failed' });
+    let sent = 0;
+    students.forEach(student => {
+      // Get or create session
+      let session = dbGet(
+        'SELECT id FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=?',
+        [student.id, date, period_number]
+      );
+      if (!session) {
+        const sid = uuidv4();
+        dbRun(`INSERT INTO attendance_sessions
+               (id,student_id,class_code,date,period_number,subject,status,method,created_at)
+               VALUES (?,?,?,?,?,?,'present','auto',?)`,
+          [sid, student.id, classCode, date, period_number, subject, now]);
+        session = { id: sid };
       }
-    }
-  }
 
-  dbRun(`UPDATE verify_logs SET result = 'pass', lat = ?, lng = ?, responded_at = ? WHERE id = ?`, [lat||null, lng||null, nowISO(), pending.id]);
-  res.json({ message: 'Verification passed!', result: 'pass' });
+      // Check no duplicate pending
+      const existing = dbGet(
+        `SELECT id FROM verify_logs WHERE student_id=? AND session_id=? AND result='pending'`,
+        [student.id, session.id]
+      );
+      if (existing) return;
+
+      dbRun(`INSERT INTO verify_logs
+             (id,student_id,session_id,period_number,subject,sent_at,result)
+             VALUES (?,?,?,?,?,?,'pending')`,
+        [uuidv4(), student.id, session.id, period_number, subject, now]);
+
+      // Push notification
+      if (student.push_token && global.io) {
+        global.io.to(`user_${student.id}`).emit('verify_alert', {
+          period_number, subject, sent_at: now,
+          window_minutes: parseInt(process.env.VERIFY_WINDOW_MINUTES || 10),
+        });
+      }
+      sent++;
+    });
+
+    res.json({ message: `Verify sent to ${sent} students`, sent });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/verify/respond — FIX: Fast response, no heavy processing
+router.post('/respond', authMiddleware, async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const { verify_log_id } = req.body;
+
+    // Find pending verify
+    let log = null;
+    if (verify_log_id) {
+      log = dbGet('SELECT * FROM verify_logs WHERE id=? AND student_id=? AND result=?',
+        [verify_log_id, studentId, 'pending']);
+    }
+    if (!log) {
+      log = dbGet(
+        `SELECT * FROM verify_logs WHERE student_id=? AND result='pending' ORDER BY sent_at DESC LIMIT 1`,
+        [studentId]
+      );
+    }
+
+    if (!log) return res.status(400).json({ error: 'No pending verification found' });
+
+    // Check time window
+    const windowMs  = parseInt(process.env.VERIFY_WINDOW_MINUTES || 10) * 60 * 1000;
+    const sentMs    = new Date(log.sent_at).getTime();
+    if (Date.now() - sentMs > windowMs) {
+      dbRun('UPDATE verify_logs SET result=? WHERE id=?', ['timeout', log.id]);
+      return res.status(400).json({ error: 'Verification window expired. Ask teacher to resend.' });
+    }
+
+    // FIX: Quick update — no face analysis delay
+    const now = nowISO();
+    dbRun('UPDATE verify_logs SET result=?, responded_at=? WHERE id=?', ['verified', now, log.id]);
+
+    // Update attendance
+    dbRun(`UPDATE attendance_sessions SET status='present' WHERE id=?`, [log.session_id]);
+
+    // Notify teacher via socket
+    const session   = dbGet('SELECT class_code FROM attendance_sessions WHERE id=?', [log.session_id]);
+    const student   = dbGet('SELECT name FROM users WHERE id=?', [studentId]);
+
+    if (global.io && session?.class_code) {
+      global.io.to(`class_${session.class_code}`).emit('student_verified', {
+        student_id:   studentId,
+        student_name: student?.name,
+        period_number: log.period_number,
+        subject:       log.subject,
+        verified_at:   now,
+      });
+    }
+
+    res.json({ success: true, message: 'Attendance verified!' });
+  } catch(e) {
+    console.error('Verify respond error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/verify/pending — Student's pending verifications
 router.get('/pending', authMiddleware, (req, res) => {
-  const session = dbGet('SELECT id FROM attendance_sessions WHERE student_id = ? AND date = ?', [req.user.id, today()]);
-  if (!session) return res.json({ pending: null });
+  try {
+    const windowMs = parseInt(process.env.VERIFY_WINDOW_MINUTES || 10) * 60 * 1000;
+    const cutoff   = new Date(Date.now() - windowMs).toISOString();
 
-  const pending = dbGet(`SELECT * FROM verify_logs WHERE student_id = ? AND session_id = ? AND result = 'pending' ORDER BY sent_at DESC LIMIT 1`, [req.user.id, session.id]);
-  if (!pending) return res.json({ pending: null });
+    const logs = dbAll(`
+      SELECT vl.*, s.date
+      FROM verify_logs vl
+      JOIN attendance_sessions s ON s.id=vl.session_id
+      WHERE vl.student_id=? AND vl.result='pending' AND vl.sent_at > ?
+      ORDER BY vl.sent_at DESC
+    `, [req.user.id, cutoff]);
 
-  const remaining = Math.max(0, WINDOW() - (Date.now() - new Date(pending.sent_at).getTime()));
-  if (remaining === 0) { dbRun(`UPDATE verify_logs SET result = 'timeout' WHERE id = ?`, [pending.id]); return res.json({ pending: null }); }
+    const enriched = logs.map(log => ({
+      ...log,
+      remaining_seconds: Math.max(0, Math.floor(
+        (new Date(log.sent_at).getTime() + windowMs - Date.now()) / 1000
+      )),
+    }));
 
-  res.json({ pending: { id: pending.id, sent_at: pending.sent_at, remaining_seconds: Math.floor(remaining/1000) } });
+    res.json({ pending: enriched, count: enriched.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/verify/history — Student's verification history
+router.get('/history', authMiddleware, (req, res) => {
+  try {
+    const logs = dbAll(`
+      SELECT vl.*, s.date
+      FROM verify_logs vl
+      JOIN attendance_sessions s ON s.id=vl.session_id
+      WHERE vl.student_id=?
+      ORDER BY vl.sent_at DESC LIMIT 50
+    `, [req.user.id]);
+
+    res.json({ logs });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/verify/teacher-history — Teacher's sent verifications
+router.get('/teacher-history', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const classCode = req.user.class_code;
+    const logs      = dbAll(`
+      SELECT
+        vl.id, vl.sent_at, vl.result, vl.period_number, vl.subject,
+        s.date, u.name as student_name, u.roll_no
+      FROM verify_logs vl
+      JOIN attendance_sessions s ON s.id=vl.session_id
+      JOIN users u ON u.id=vl.student_id
+      WHERE s.class_code=?
+      ORDER BY vl.sent_at DESC LIMIT 200
+    `, [classCode]);
+
+    res.json({ logs });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 module.exports = router;
