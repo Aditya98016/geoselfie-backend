@@ -1,75 +1,73 @@
 /*
- * © 2026 GeoSelfie v2.0 — All rights reserved.
- * Real-time Socket.IO for GeoChat
+ * © 2026 GeoSelfie — All rights reserved.
+ * FIX: Real-time chat auto refresh
  */
 const jwt = require('jsonwebtoken');
-const { dbRun, dbGet } = require('./database');
 
-function setupSocket(io) {
+module.exports = function setupSocket(io) {
   global.io = io;
 
   io.use((socket, next) => {
-    const token = socket.handshake.auth?.token;
-    if (!token) return next(new Error('Authentication required'));
     try {
-      socket.user = jwt.verify(token, process.env.JWT_SECRET);
+      const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+      if (!token) return next(new Error('No token'));
+      const user = jwt.verify(token, process.env.JWT_SECRET);
+      socket.user = user;
       next();
-    } catch { next(new Error('Invalid token')); }
+    } catch(e) { next(new Error('Invalid token')); }
   });
 
-  io.on('connection', socket => {
-    const userId    = socket.user?.id;
-    const classCode = socket.user?.class_code;
-
-    console.log(`🔗 Connected: ${socket.user?.name} [${socket.user?.role}]`);
-
-    // Update online status
-    dbRun('UPDATE users SET is_online = 1 WHERE id = ?', [userId]);
+  io.on('connection', (socket) => {
+    const user = socket.user;
+    console.log(`Socket connected: ${user?.name} (${user?.role})`);
 
     // Join class room
-    if (classCode) socket.join(`class_${classCode}`);
+    if (user?.class_code) {
+      socket.join(`class_${user.class_code}`);
+    }
 
     // Join personal room
-    socket.join(`user_${userId}`);
+    socket.join(`user_${user?.id}`);
+
+    // Join chat rooms
+    socket.on('join_chat', (chatId) => {
+      socket.join(`chat_${chatId}`);
+    });
+
+    socket.on('leave_chat', (chatId) => {
+      socket.leave(`chat_${chatId}`);
+    });
 
     // Typing indicator
-    socket.on('typing', ({ chat_id, is_typing }) => {
-      socket.to(chat_id).emit('user_typing', {
-        user_id: userId,
-        name: socket.user?.name,
-        chat_id,
-        is_typing
+    socket.on('typing', ({ chatId, typing }) => {
+      socket.to(`chat_${chatId}`).emit('typing', {
+        user_id: user?.id,
+        name:    user?.name,
+        typing,
       });
     });
 
-    // Join chat room
-    socket.on('join_chat', chat_id => {
-      socket.join(chat_id);
+    // Mark read
+    socket.on('mark_read', ({ chatId }) => {
+      socket.to(`chat_${chatId}`).emit('message_read', { user_id: user?.id });
     });
 
-    // Leave chat room
-    socket.on('leave_chat', chat_id => {
-      socket.leave(chat_id);
-    });
+    // Online status
+    if (user?.id) {
+      const { dbRun } = require('./database');
+      dbRun('UPDATE users SET is_online=1, last_seen=? WHERE id=?',
+        [new Date().toISOString(), user.id]);
+      io.emit('user_status', { user_id: user.id, online: true });
+    }
 
-    // Mark message read
-    socket.on('mark_read', ({ message_id }) => {
-      const { v4: uuidv4 } = require('uuid');
-      dbRun('INSERT OR IGNORE INTO message_reads (id, message_id, user_id, read_at) VALUES (?, ?, ?, ?)',
-        [uuidv4(), message_id, userId, new Date().toISOString()]);
-    });
-
-    // Online status broadcast
-    socket.to(`class_${classCode}`).emit('user_online', { user_id: userId, is_online: true });
-
-    // Disconnect
     socket.on('disconnect', () => {
-      const lastSeen = new Date().toISOString();
-      dbRun('UPDATE users SET is_online = 0, last_seen = ? WHERE id = ?', [lastSeen, userId]);
-      socket.to(`class_${classCode}`).emit('user_online', { user_id: userId, is_online: false, last_seen: lastSeen });
-      console.log(`❌ Disconnected: ${socket.user?.name}`);
+      if (user?.id) {
+        const { dbRun } = require('./database');
+        dbRun('UPDATE users SET is_online=0, last_seen=? WHERE id=?',
+          [new Date().toISOString(), user.id]);
+        io.emit('user_status', { user_id: user.id, online: false });
+      }
+      console.log(`Socket disconnected: ${user?.name}`);
     });
   });
-}
-
-module.exports = setupSocket;
+};

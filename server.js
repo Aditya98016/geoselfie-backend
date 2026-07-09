@@ -47,11 +47,13 @@ app.get('/', (req, res) => {
 app.use('/api/auth',          require('./auth'));
 app.use('/api/attendance',    require('./attendance'));
 app.use('/api/verify',        require('./verify'));
+app.use('/api/verify-history', require('./verify_history'));
 app.use('/api/teacher',       require('./teacher'));
 app.use('/api/periods',       require('./periods'));
 app.use('/api/qr',            require('./qr'));
 app.use('/api/chat',          require('./chat'));
 app.use('/api/academics',     require('./academics'));
+app.use('/api/report-card', require('./report_card'));
 app.use('/api/leave',         require('./leave'));
 app.use('/api/notice',        require('./notice'));
 app.use('/api/parent',        require('./parent'));

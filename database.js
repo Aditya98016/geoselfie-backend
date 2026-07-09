@@ -84,23 +84,25 @@ async function setupDatabase() {
   );`);
 
   // Attendance Sessions
-  db.run(`CREATE TABLE IF NOT EXISTS attendance_sessions (
-    id TEXT PRIMARY KEY,
-    student_id TEXT NOT NULL,
-    class_code TEXT,
-    date TEXT NOT NULL,
-    period_id TEXT,
-    period_number INTEGER DEFAULT 0,
-    subject TEXT DEFAULT 'General',
-    entry_time DATETIME,
-    exit_time DATETIME,
-    total_minutes INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'absent',
-    method TEXT DEFAULT 'auto',
-    fake_gps_detected INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(student_id, date, period_number)
-  );`);
+ // attendance_sessions table mein add karo
+db.run(`CREATE TABLE IF NOT EXISTS attendance_sessions (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  class_code TEXT,
+  date TEXT NOT NULL,
+  period_id TEXT,
+  period_number INTEGER DEFAULT 0,
+  subject TEXT DEFAULT 'General',
+  entry_time DATETIME,
+  exit_time DATETIME,
+  total_minutes INTEGER DEFAULT 0,
+  accumulated_minutes INTEGER DEFAULT 0,  -- FIX: exit ke baad accumulate hota hai
+  status TEXT DEFAULT 'absent',
+  method TEXT DEFAULT 'auto',
+  fake_gps_detected INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(student_id, date, period_number)
+);`);
 
   // Verify Logs
   db.run(`CREATE TABLE IF NOT EXISTS verify_logs (
