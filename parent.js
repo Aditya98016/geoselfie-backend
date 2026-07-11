@@ -70,7 +70,7 @@ if (!parent.class_code && student.class_code) {
   );
 }
 
-const today = new Date().toISOString().split('T')[0];
+
     const today   = new Date().toISOString().split('T')[0];
     const session = dbGet(
       'SELECT * FROM attendance_sessions WHERE student_id=? AND date=? ORDER BY period_number LIMIT 1',
