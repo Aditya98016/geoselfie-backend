@@ -5,7 +5,7 @@
  * FIX: parent_code linking corrected
  */
 const express = require('express');
-const { dbGet, dbAll } = require('./database');
+const { dbGet, dbAll, dbRun } = require('./database');
 const { authMiddleware } = require('./middleware');
 const router = express.Router();
 
@@ -43,18 +43,13 @@ router.get('/child-info', authMiddleware, (req, res) => {
       console.log('Method 2 result:', student?.name || 'not found');
     }
 
-    // FIX Method 3: student_unique_code se match karo
-    // (jab parent ne STU-XXXXXXXX daala tha register karte waqt)
-    if (!student) {
-      // parent ke registration mein student_unique_code se class_code mila tha
-      // woh class_code se student dhundho
-      const allStudents = dbAll(
-        'SELECT * FROM users WHERE role=? AND class_code=?',
-        ['student', parent.class_code]
-      );
-      console.log('All students in class:', allStudents.length);
-      if (allStudents.length === 1) student = allStudents[0];
-    }
+    // FIX Method 3: student_unique_code from registration
+if (!student && parent.parent_code) {
+  student = dbGet(
+    'SELECT * FROM users WHERE unique_code=? AND role=?',
+    [parent.parent_code, 'student']
+  );
+}
 
     if (!student) {
       console.log('No student found for parent:', parent.id);
@@ -65,7 +60,17 @@ router.get('/child-info', authMiddleware, (req, res) => {
     }
 
     console.log('Student found:', student.name);
+console.log('Student found:', student.name);
 
+// FIX 8: Auto update parent class_code
+if (!parent.class_code && student.class_code) {
+  dbRun(
+    'UPDATE users SET class_code=? WHERE id=?',
+    [student.class_code, parent.id]
+  );
+}
+
+const today = new Date().toISOString().split('T')[0];
     const today   = new Date().toISOString().split('T')[0];
     const session = dbGet(
       'SELECT * FROM attendance_sessions WHERE student_id=? AND date=? ORDER BY period_number LIMIT 1',
@@ -117,6 +122,14 @@ router.get('/homework-status', authMiddleware, (req, res) => {
     if (!student && parent?.class_code) {
       student = dbGet('SELECT * FROM users WHERE class_code=? AND role=? LIMIT 1', [parent.class_code, 'student']);
     }
+
+    // FIX 8: Method 3
+if (!student && parent?.parent_code) {
+  student = dbGet(
+    'SELECT * FROM users WHERE unique_code=? AND role=?',
+    [parent.parent_code, 'student']
+  );
+}
 
     if (!student) return res.json({ homework: [] });
 
