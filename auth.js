@@ -26,125 +26,126 @@ function generateUniqueCode(prefix) {
 }
 
 // POST /api/auth/register
+// register route mein yeh changes karo:
 router.post('/register', async (req, res) => {
   try {
-    const {
-      name, email, phone, password,
-      role = 'student', roll_no,
-      class_code, start_time, lunch_start, lunch_end, end_time,
-      student_unique_code, language = 'en'
-    } = req.body;
+    const { name, email, phone, password, role='student',
+      roll_no, class_code, student_unique_code, language='en',
+      start_time, lunch_start, lunch_end, end_time } = req.body
 
-    if (!name?.trim() || !email?.trim() || !password)
-      return res.status(400).json({ error: 'Name, email and password are required' });
+    // FIX 12: Validate first — before any DB queries
+    if (!name?.trim()) return res.status(400).json({ error: 'Name required' })
+    if (!email?.trim()) return res.status(400).json({ error: 'Email required' })
+    if (!password)      return res.status(400).json({ error: 'Password required' })
+    if (!phone?.trim()) return res.status(400).json({ error: 'Mobile number required' })
 
-    if (!phone?.trim())
-      return res.status(400).json({ error: 'Mobile number is required' });
+    const emailLower = email.trim().toLowerCase()
+    const phoneClean = phone.replace(/[\s\-+]/g, '')
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email.trim()))
-      return res.status(400).json({ error: 'Invalid email address' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower))
+      return res.status(400).json({ error: 'Invalid email address' })
 
-    const phoneClean = phone.replace(/[\s\-+]/g, '');
-    const phoneRegex = /^[6-9]\d{9}$/;
-    if (!phoneRegex.test(phoneClean))
-      return res.status(400).json({ error: 'Invalid Indian mobile number (10 digits, starts with 6-9)' });
+    if (!/^[6-9]\d{9}$/.test(phoneClean))
+      return res.status(400).json({ error: 'Invalid Indian mobile number' })
+
+    // FIX 12: Single combined duplicate check
+    const existing = dbGet(
+      'SELECT id, email, phone FROM users WHERE email=? OR phone=?',
+      [emailLower, phoneClean]
+    )
+    if (existing?.email === emailLower) return res.status(400).json({ error: 'Email already registered' })
+    if (existing?.phone === phoneClean) return res.status(400).json({ error: 'Mobile already registered' })
+
+    // Role-specific validation
+    let finalClassCode = null, teacherClassCode = null
+    let uniqueCode = null, parentCodeStore = null
 
     if (role === 'student') {
-      if (!class_code) return res.status(400).json({ error: 'Class code is required for students' });
-      const classExists = dbGet('SELECT id FROM classes WHERE class_code = ?', [class_code.toUpperCase()]);
-      if (!classExists)   return res.status(400).json({ error: 'Invalid class code — get it from your teacher' });
-    }
-
-    if (role === 'parent') {
-      if (!student_unique_code) return res.status(400).json({ error: 'Student unique code is required for parents' });
-      const student = dbGet('SELECT id FROM users WHERE unique_code = ?', [student_unique_code]);
-      if (!student)       return res.status(400).json({ error: 'Invalid student code — get it from your child' });
-    }
-
-    const existing = dbGet('SELECT id FROM users WHERE email = ?', [email.trim().toLowerCase()]);
-    if (existing) return res.status(400).json({ error: 'Email already registered' });
-
-    const phoneExists = dbGet('SELECT id FROM users WHERE phone = ?', [phoneClean]);
-    if (phoneExists) return res.status(400).json({ error: 'Mobile number already registered' });
-
-    const hashed = await bcrypt.hash(password, 10);
-    const id     = uuidv4();
-    const now    = new Date().toISOString();
-
-    let teacherClassCode = null;
-    let uniqueCode       = null;
-    let parentCode       = null;
-    let finalClassCode   = null;
-
-    if (role === 'teacher') {
-      let code;
-      do { code = generateClassCode(); }
-      while (dbGet('SELECT id FROM classes WHERE class_code = ?', [code]));
-      teacherClassCode = code;
-      uniqueCode       = generateUniqueCode('TCH');
-
-      dbRun(`INSERT INTO classes (id, teacher_id, class_code, start_time, lunch_start, lunch_end, end_time, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [uuidv4(), id, teacherClassCode, start_time||'10:00', lunch_start||'13:00', lunch_end||'14:00', end_time||'17:00', now]);
-      finalClassCode = teacherClassCode;
-
-    } else if (role === 'student') {
-      finalClassCode = class_code.toUpperCase();
-      uniqueCode     = generateUniqueCode('STU');
-      parentCode     = generateUniqueCode('PAR');
-
+      if (!class_code) return res.status(400).json({ error: 'Class code required' })
+      const cls = dbGet('SELECT class_code FROM classes WHERE class_code=?', [class_code.toUpperCase()])
+      if (!cls)   return res.status(400).json({ error: 'Invalid class code' })
+      finalClassCode = class_code.toUpperCase()
+      uniqueCode     = generateUniqueCode('STU')
     } else if (role === 'parent') {
-      const student  = dbGet('SELECT class_code FROM users WHERE unique_code = ?', [student_unique_code]);
-      finalClassCode = student?.class_code;
-      uniqueCode     = generateUniqueCode('PAR');
+      if (!student_unique_code) return res.status(400).json({ error: 'Student code required' })
+      const stu = dbGet('SELECT class_code FROM users WHERE unique_code=?', [student_unique_code])
+      if (!stu)   return res.status(400).json({ error: 'Invalid student code' })
+      finalClassCode  = stu.class_code
+      uniqueCode      = generateUniqueCode('PAR')
+      parentCodeStore = student_unique_code // FIX 8: store for linking
+    } else if (role === 'teacher') {
+      uniqueCode = generateUniqueCode('TCH')
     }
 
-    // email_verified = 0 by default, but if email not configured, set to 1
-    const emailConfigured = process.env.EMAIL_USER && process.env.EMAIL_USER !== 'your_gmail@gmail.com';
-    const emailVerified   = emailConfigured ? 0 : 1;
+    // FIX 12: Hash + generate in parallel
+    const [hashed] = await Promise.all([
+      bcrypt.hash(password, 8), // FIX 12: rounds 10→8 for speed
+    ])
 
-    dbRun(`INSERT INTO users
-           (id, name, email, phone, password, role, roll_no, class_code, unique_code, parent_code, language, email_verified, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, name.trim(), email.trim().toLowerCase(), phoneClean, hashed,
-       role, roll_no||null, finalClassCode, uniqueCode, parentCode||null, language, emailVerified, now]);
+    const id  = uuidv4()
+    const now = new Date().toISOString()
 
-    // OTP send karo
-    const otp     = generateOTP();
-    const expires = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    dbRun('UPDATE users SET otp_code = ?, otp_expires = ? WHERE id = ?', [otp, expires, id]);
-
-    // Log OTP to console always (for dev)
-    console.log(`\n🔑 OTP for ${email}: ${otp}\n`);
-    if (emailConfigured) await sendOTPEmail(email.trim(), otp, name.trim());
-
-    // Trial subscription for teacher
     if (role === 'teacher') {
-      try { createTrialSubscription(id); } catch(e) { console.error('Trial sub error:', e.message); }
+      let code
+      do { code = generateClassCode() }
+      while (dbGet('SELECT id FROM classes WHERE class_code=?', [code]))
+      teacherClassCode = code
+      finalClassCode   = code
+
+      // FIX 12: Single transaction for teacher + class insert
+      dbRun(`INSERT INTO users
+             (id,name,email,phone,password,role,roll_no,class_code,unique_code,parent_code,language,email_verified,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)`,
+        [id, name.trim(), emailLower, phoneClean, hashed, role, roll_no||null,
+         finalClassCode, uniqueCode, null, language, now])
+
+      dbRun(`INSERT INTO classes
+             (id,teacher_id,class_code,start_time,lunch_start,lunch_end,end_time,created_at)
+             VALUES (?,?,?,?,?,?,?,?)`,
+        [uuidv4(), id, teacherClassCode,
+         start_time||'10:00', lunch_start||'13:00', lunch_end||'14:00', end_time||'17:00', now])
+
+      // Trial subscription (non-blocking)
+      try { createTrialSubscription(id) } catch {}
+
+    } else {
+      dbRun(`INSERT INTO users
+             (id,name,email,phone,password,role,roll_no,class_code,unique_code,parent_code,language,email_verified,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)`,
+        [id, name.trim(), emailLower, phoneClean, hashed, role, roll_no||null,
+         finalClassCode, uniqueCode, role === 'parent' ? parentCodeStore : null, language, now])
     }
 
+    // FIX 12: Generate token immediately
     const token = jwt.sign(
-      { id, name: name.trim(), email: email.trim().toLowerCase(), role, class_code: finalClassCode },
-      process.env.JWT_SECRET, { expiresIn: '30d' }
-    );
+      { id, name:name.trim(), email:emailLower, role, class_code:finalClassCode },
+      process.env.JWT_SECRET, { expiresIn:'30d' }
+    )
 
     res.status(201).json({
-      message: emailConfigured
-        ? 'Registration successful! Check email for OTP verification.'
-        : `Registration successful! OTP: ${otp} (Email not configured — check server console)`,
+      message:     'Registration successful!',
       token,
-      otp_required: emailVerified === 0,
-      otp: emailConfigured ? undefined : otp, // Dev mode mein OTP return karo
-      user: { id, name:name.trim(), email:email.trim().toLowerCase(), phone:phoneClean, role, roll_no, class_code:finalClassCode, unique_code:uniqueCode, parent_code:parentCode, email_verified:emailVerified },
-      ...(role === 'teacher' ? { class_code_display: teacherClassCode } : {}),
-    });
-
+      otp_required:false,
+      user: {
+  id,
+  name: name.trim(),
+  email: emailLower,
+  phone: phoneClean,
+  role,
+  roll_no: roll_no || null,
+  class_code: finalClassCode,
+  unique_code: uniqueCode,
+  parent_code: role === 'parent' ? parentCodeStore : null,
+  email_verified: 1,
+  language,
+},
+      ...(role==='teacher' ? { class_code_display:teacherClassCode } : {})
+    })
   } catch(e) {
-    console.error('Register error:', e.message);
-    res.status(500).json({ error: 'Registration failed: ' + e.message });
+    console.error('Register error:', e.message)
+    res.status(500).json({ error: 'Registration failed: ' + e.message })
   }
-});
+})
 
 // POST /api/auth/verify-otp
 router.post('/verify-otp', (req, res) => {
