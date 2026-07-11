@@ -6,7 +6,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { dbGet, dbAll, dbRun } = require('./database');
 const { isInsideGeofence, isCollegeTime, detectFakeGPS } = require('./geofence');
-const { authMiddleware } = require('./middleware');
+const { authMiddleware, teacherOnly } = require('./middleware');
 
 const router  = express.Router();
 const todayDate = () => new Date().toISOString().split('T')[0];
@@ -295,7 +295,7 @@ router.post('/correction-request', authMiddleware, (req, res) => {
 });
 
 // GET /api/attendance/correction-requests — teacher ke liye
-router.get('/correction-requests', authMiddleware, (req, res) => {
+router.get('/correction-requests', authMiddleware, teacherOnly, (req, res) => {
   try {
     const requests = dbAll(`
       SELECT cr.*, u.name as student_name, u.roll_no, u.email as student_email
@@ -309,7 +309,7 @@ router.get('/correction-requests', authMiddleware, (req, res) => {
 });
 
 // PUT /api/attendance/correction-request/:id
-router.put('/correction-request/:id', authMiddleware, (req, res) => {
+router.put('/correction-request/:id', authMiddleware, teacherOnly, (req, res) => {
   try {
     const { status, teacher_note } = req.body;
     if (!['approved','rejected'].includes(status))
@@ -339,6 +339,132 @@ router.put('/correction-request/:id', authMiddleware, (req, res) => {
     }
     res.json({ message: `Correction ${status}!` });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/attendance/cancel — FIX 15: Teacher can cancel attendance
+router.post('/cancel', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const { student_id, date, period_number = 0, reason } = req.body;
+
+    if (!student_id || !date)
+      return res.status(400).json({ error: 'student_id and date required' });
+
+    if (!reason?.trim())
+      return res.status(400).json({ error: 'Reason required for cancellation' });
+
+    const session = dbGet(
+      'SELECT * FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=?',
+      [student_id, date, period_number]
+    );
+
+    const now = nowISO();
+
+    if (session) {
+
+      const prevStatus = session.status;
+
+      dbRun(
+        `UPDATE attendance_sessions
+         SET status='cancelled',
+             total_minutes=0,
+             exit_time=?
+         WHERE student_id=? 
+         AND date=? 
+         AND period_number=?`,
+        [now, student_id, date, period_number]
+      );
+
+      dbRun(
+        `INSERT INTO correction_requests
+        (id,student_id,session_date,period_number,subject,reason,status,teacher_note,requested_at,resolved_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [
+          uuidv4(),
+          student_id,
+          date,
+          period_number,
+          session.subject || 'General',
+          `CANCELLED by teacher: ${reason}`,
+          'cancelled',
+          `Previous status: ${prevStatus}`,
+          now,
+          now
+        ]
+      );
+
+    } else {
+
+      dbRun(
+        `INSERT INTO attendance_sessions
+        (id,student_id,class_code,date,period_number,subject,status,method,total_minutes,created_at)
+        VALUES (?,?,?,?,?,?,?,?,0,?)`,
+        [
+          uuidv4(),
+          student_id,
+          req.user.class_code,
+          date,
+          period_number,
+          'General',
+          'cancelled',
+          'cancelled',
+          now
+        ]
+      );
+
+    }
+
+
+    const student = dbGet(
+      'SELECT name FROM users WHERE id=?',
+      [student_id]
+    );
+
+
+    if (global.io) {
+      global.io.to(`user_${student_id}`).emit(
+        'attendance_cancelled',
+        {
+          date,
+          period_number,
+          reason,
+          message:`Your attendance for ${date} was cancelled by teacher`
+        }
+      );
+    }
+
+
+    res.json({
+      message:`Attendance cancelled for ${student?.name || student_id}`
+    });
+
+
+  } catch(e){
+    res.status(500).json({ error:e.message });
+  }
+});
+
+
+// GET /api/attendance/cancelled-history
+router.get('/cancelled-history', authMiddleware, teacherOnly, (req,res)=>{
+  try {
+
+    const logs = dbAll(`
+      SELECT s.*, u.name as student_name, u.roll_no
+      FROM attendance_sessions s
+      JOIN users u ON u.id=s.student_id
+      WHERE s.class_code=?
+      AND s.status='cancelled'
+      ORDER BY s.created_at DESC
+      LIMIT 50
+    `,
+    [req.user.class_code]);
+
+
+    res.json({logs});
+
+  } catch(e){
+    res.status(500).json({error:e.message});
+  }
 });
 
 // GET /api/attendance/pending-verify
