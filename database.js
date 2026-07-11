@@ -437,6 +437,20 @@ db.run(`CREATE TABLE IF NOT EXISTS attendance_sessions (
     resolved_at DATETIME
   );`);
 
+  // FIX: Performance indexes
+db.run(`CREATE INDEX IF NOT EXISTS idx_attendance_student_date
+        ON attendance_sessions(student_id, date)`)
+db.run(`CREATE INDEX IF NOT EXISTS idx_attendance_class_date
+        ON attendance_sessions(class_code, date)`)
+db.run(`CREATE INDEX IF NOT EXISTS idx_verify_student
+        ON verify_logs(student_id, result)`)
+db.run(`CREATE INDEX IF NOT EXISTS idx_users_class
+        ON users(class_code, role)`)
+db.run(`CREATE INDEX IF NOT EXISTS idx_messages_chat
+        ON messages(chat_id, sent_at)`)
+db.run(`CREATE INDEX IF NOT EXISTS idx_homework_class
+        ON homework(class_code)`)
+
   save();
   console.log('✅ GeoSelfie Database ready!');
   return { db, save };
