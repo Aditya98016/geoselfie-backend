@@ -27,8 +27,33 @@ function getGradeColor(grade) {
 }
 
 // GET /api/report-card/:studentId — HTML report card
-router.get('/:studentId', authMiddleware, (req, res) => {
+router.get('/:studentId', (req, res) => {
   try {
+// FIX 9: Token from query param OR Authorization header
+let userId = null
+
+const headerToken = req.headers.authorization?.split(' ')[1]
+const queryToken  = req.query.token
+
+const token = headerToken || queryToken
+
+if (!token) {
+  return res
+    .status(401)
+    .send('<h2>No token provided. Please login and try again.</h2>')
+}
+
+const jwt = require('jsonwebtoken')
+
+try {
+  const decoded = jwt.verify(token, process.env.JWT_SECRET)
+  userId = decoded.id
+} catch (e) {
+  return res
+    .status(401)
+    .send('<h2>Session expired. Please login again.</h2>')
+}
+
     const student = dbGet(
       'SELECT * FROM users WHERE id=?', [req.params.studentId]
     );
