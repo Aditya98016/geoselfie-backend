@@ -1,178 +1,124 @@
 /*
  * © 2026 GeoSelfie — All rights reserved.
- * Subscription & Access Control
+ * FIX 1: Subscription blocking + trial once + backend validation
  */
-const express = require('express');
-const { v4: uuidv4 } = require('uuid');
-const { dbGet, dbAll, dbRun } = require('./database');
-const { authMiddleware, teacherOnly } = require('./middleware');
+const express = require('express')
+const { v4: uuidv4 } = require('uuid')
+const { dbGet, dbRun, dbAll } = require('./database')
+const { authMiddleware, teacherOnly } = require('./middleware')
 
-const router = express.Router();
-const nowISO = () => new Date().toISOString();
+const router = express.Router()
 
-// Plans config
 const PLANS = {
-  trial:    { label:'Free Trial',  days:30,  price:0,    currency:'INR' },
-  monthly:  { label:'1 Month',     days:30,  price:299,  currency:'INR' },
-  quarterly:{ label:'3 Months',    days:90,  price:799,  currency:'INR' },
-  biannual: { label:'6 Months',    days:180, price:1499, currency:'INR' },
-  annual:   { label:'1 Year',      days:365, price:2499, currency:'INR' },
-};
+  trial:     { label:'Free Trial',  days:30,  price:0,    tax:0    },
+  monthly:   { label:'1 Month',     days:30,  price:299,  tax:0    },
+  quarterly: { label:'3 Months',    days:90,  price:799,  tax:0    },
+  biannual:  { label:'6 Months',    days:180, price:1499, tax:0    },
+  annual:    { label:'1 Year',      days:365, price:2499, tax:0    },
+}
 
-// Auto-create trial subscription when teacher registers
 function createTrialSubscription(teacherId) {
-  const existing = dbGet('SELECT id FROM subscriptions WHERE teacher_id = ?', [teacherId]);
-  if (existing) return existing;
-  const id      = uuidv4();
-  const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  dbRun(`INSERT INTO subscriptions (id, teacher_id, plan, status, started_at, expires_at, trial_used, amount, created_at)
-         VALUES (?, ?, 'trial', 'active', ?, ?, 1, 0, ?)`,
-    [id, teacherId, nowISO(), expires, nowISO()]);
-  return { id, plan:'trial', status:'active', expires_at: expires };
+  const existing = dbGet('SELECT * FROM subscriptions WHERE teacher_id=?', [teacherId])
+  if (existing) return existing
+
+  const id  = uuidv4()
+  const now = new Date().toISOString()
+  dbRun(`INSERT INTO subscriptions
+    (id,teacher_id,plan,status,is_active,trial_used,starts_at,expires_at,days_left,created_at)
+    VALUES (?,?,'none','inactive',0,0,NULL,NULL,0,?)`,
+    [id, teacherId, now])
+  return dbGet('SELECT * FROM subscriptions WHERE teacher_id=?', [teacherId])
 }
 
-// Check if teacher subscription is active
-function isSubscriptionActive(teacherId) {
-  const sub = dbGet('SELECT * FROM subscriptions WHERE teacher_id = ?', [teacherId]);
-  if (!sub) return false;
-  if (sub.status !== 'active') return false;
-  if (sub.expires_at && new Date() > new Date(sub.expires_at)) {
-    dbRun('UPDATE subscriptions SET status = ? WHERE teacher_id = ?', ['expired', teacherId]);
-    return false;
-  }
-  return true;
-}
+// FIX 1: GET /api/subscription/status — Always from DB, never trust client
+router.get('/status', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    let sub = dbGet('SELECT * FROM subscriptions WHERE teacher_id=?', [req.user.id])
+    if (!sub) sub = createTrialSubscription(req.user.id)
 
-// GET /api/subscription/status — Check current user's subscription
-router.get('/status', authMiddleware, (req, res) => {
-  const userId = req.user.id;
-  const role   = req.user.role;
+    const now     = new Date()
+    let isActive  = false
+    let daysLeft  = 0
 
-  if (role === 'teacher') {
-    let sub = dbGet('SELECT * FROM subscriptions WHERE teacher_id = ?', [userId]);
-    if (!sub) sub = createTrialSubscription(userId);
-
-    // Check expiry
-    const active = isSubscriptionActive(userId);
-    const daysLeft = sub.expires_at
-      ? Math.max(0, Math.ceil((new Date(sub.expires_at) - Date.now()) / (1000*60*60*24)))
-      : 0;
-
-    return res.json({
-      role: 'teacher',
-      subscription: { ...sub, is_active: active, days_left: daysLeft },
-      plans: PLANS,
-      features: active ? getAllFeatures() : getTrialFeatures(),
-    });
-  }
-
-  // Student or Parent — check teacher's subscription
-  const classCode = req.user.class_code;
-  const teacher   = classCode
-    ? dbGet('SELECT id FROM users WHERE class_code = ? AND role = ?', [classCode, 'teacher'])
-    : null;
-  const teacherSub = teacher ? dbGet('SELECT * FROM subscriptions WHERE teacher_id = ?', [teacher.id]) : null;
-  const teacherActive = teacher ? isSubscriptionActive(teacher.id) : false;
-
-  res.json({
-    role,
-    teacher_subscription_active: teacherActive,
-    subscription: teacherSub || null,
-    features: teacherActive ? getAllFeatures() : getLimitedFeatures(),
-  });
-});
-
-// GET /api/subscription/plans — All plans
-router.get('/plans', (req, res) => {
-  res.json({ plans: PLANS });
-});
-
-// POST /api/subscription/activate — Activate/upgrade plan
-router.post('/activate', authMiddleware, teacherOnly, async (req, res) => {
-  const { plan, payment_id } = req.body;
-  if (!PLANS[plan]) return res.status(400).json({ error: 'Invalid plan' });
-
-  const planConfig = PLANS[plan];
-  const expires    = new Date(Date.now() + planConfig.days * 24 * 60 * 60 * 1000).toISOString();
-  const teacherId  = req.user.id;
-
-  const existing = dbGet('SELECT id FROM subscriptions WHERE teacher_id = ?', [teacherId]);
-  if (existing) {
-    dbRun(`UPDATE subscriptions SET plan=?, status='active', started_at=?, expires_at=?, payment_id=?, amount=? WHERE teacher_id=?`,
-      [plan, nowISO(), expires, payment_id||null, planConfig.price, teacherId]);
-  } else {
-    dbRun(`INSERT INTO subscriptions (id, teacher_id, plan, status, started_at, expires_at, trial_used, payment_id, amount, created_at)
-           VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
-      [uuidv4(), teacherId, plan, nowISO(), expires, plan==='trial'?1:0, payment_id||null, planConfig.price, nowISO()]);
-  }
-
-  res.json({ message: `Plan activated: ${planConfig.label}`, expires_at: expires, plan });
-});
-
-// POST /api/subscription/cancel
-router.post('/cancel', authMiddleware, teacherOnly, (req, res) => {
-  dbRun('UPDATE subscriptions SET status = ? WHERE teacher_id = ?', ['cancelled', req.user.id]);
-  res.json({ message: 'Subscription cancelled' });
-});
-
-// GET /api/subscription/check-access — Check if a feature is accessible
-router.get('/check-access', authMiddleware, (req, res) => {
-  const { feature } = req.query;
-  const role        = req.user.role;
-
-  if (role === 'teacher') {
-    const active = isSubscriptionActive(req.user.id);
-    const sub    = dbGet('SELECT plan FROM subscriptions WHERE teacher_id = ?', [req.user.id]);
-    if (!active) return res.json({ access: false, reason: 'Subscription expired', upgrade_required: true });
-
-    // Trial limitations
-    if (sub?.plan === 'trial' && PREMIUM_ONLY_FEATURES.includes(feature)) {
-      const sub2 = dbGet('SELECT * FROM subscriptions WHERE teacher_id = ?', [req.user.id]);
-      const days = Math.ceil((new Date(sub2.expires_at)-Date.now())/(1000*60*60*24));
-      return res.json({ access: true, trial: true, days_left: days });
+    if (sub.expires_at) {
+      const exp = new Date(sub.expires_at)
+      daysLeft  = Math.max(0, Math.ceil((exp - now) / (1000 * 60 * 60 * 24)))
+      isActive  = daysLeft > 0
     }
-    return res.json({ access: true });
-  }
 
-  // Student/Parent
-  const classCode    = req.user.class_code;
-  const teacher      = dbGet('SELECT id FROM users WHERE class_code = ? AND role = ?', [classCode, 'teacher']);
-  const teacherActive = teacher ? isSubscriptionActive(teacher.id) : false;
-  res.json({ access: teacherActive, teacher_subscription_required: !teacherActive });
-});
+    // Auto-expire in DB if needed
+    if (sub.is_active && !isActive && sub.expires_at) {
+      dbRun('UPDATE subscriptions SET is_active=0, status=? WHERE teacher_id=?',
+        ['expired', req.user.id])
+      sub.is_active = 0
+      sub.status    = 'expired'
+    }
 
-const PREMIUM_ONLY_FEATURES = ['ai_insights', 'bulk_export', 'advanced_reports', 'face_recognition'];
+    res.json({
+      subscription: {
+        ...sub,
+        is_active:  isActive ? 1 : 0,
+        days_left:  daysLeft,
+        trial_used: sub.trial_used || 0,
+      },
+      plans:       PLANS,
+      needs_sub:   !isActive,
+    })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
 
-function getAllFeatures() {
-  return {
-    attendance:        true,
-    geo_verify:        true,
-    qr_attendance:     true,
-    period_wise:       true,
-    geochat:           true,
-    academics:         true,
-    leave_management:  true,
-    notice_board:      true,
-    ai_insights:       true,
-    advanced_reports:  true,
-    bulk_export:       true,
-    parent_connect:    true,
-    push_notifications:true,
-    multi_language:    true,
-    face_recognition:  false, // future
-  };
-}
-function getTrialFeatures() { return { ...getAllFeatures(), bulk_export: true, ai_insights: true }; }
-function getLimitedFeatures() {
-  return {
-    attendance:        true,
-    geo_verify:        true,
-    geochat:           false,
-    academics:         true,
-    ai_insights:       false,
-    advanced_reports:  false,
-    bulk_export:       false,
-  };
-}
+// FIX 1: POST /api/subscription/activate
+router.post('/activate', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const { plan, payment_id, order_id } = req.body
+    if (!PLANS[plan]) return res.status(400).json({ error: 'Invalid plan' })
 
-module.exports = { router, createTrialSubscription, isSubscriptionActive };
+    const planInfo  = PLANS[plan]
+    const teacherId = req.user.id
+
+    let sub = dbGet('SELECT * FROM subscriptions WHERE teacher_id=?', [teacherId])
+    if (!sub) sub = createTrialSubscription(teacherId)
+
+    // FIX 1: Trial can only be used ONCE — check DB
+    if (plan === 'trial') {
+      if (sub.trial_used) {
+        return res.status(400).json({
+          error: 'Free Trial already used. Please choose a paid plan.',
+          trial_used: true,
+        })
+      }
+    }
+
+    const now       = new Date()
+    const expiresAt = new Date(now.getTime() + planInfo.days * 24 * 60 * 60 * 1000)
+
+    dbRun(`UPDATE subscriptions SET
+      plan=?, status='active', is_active=1,
+      trial_used=CASE WHEN ? = 'trial' THEN 1 ELSE trial_used END,
+      starts_at=?, expires_at=?, days_left=?,
+      razorpay_payment_id=?, razorpay_order_id=?,
+      updated_at=?
+      WHERE teacher_id=?`,
+      [plan, plan, now.toISOString(), expiresAt.toISOString(), planInfo.days,
+       payment_id || null, order_id || null, now.toISOString(), teacherId])
+
+    // Create notification
+    dbRun(`INSERT INTO notifications (id,user_id,type,title,body,module,is_read,created_at)
+           VALUES (?,?,'subscription','Subscription Activated',?,  'subscription',0,?)`,
+      [uuidv4(), teacherId,
+       planInfo.label + ' activated! Valid until ' + expiresAt.toLocaleDateString('en-IN'),
+       now.toISOString()])
+
+    const updated = dbGet('SELECT * FROM subscriptions WHERE teacher_id=?', [teacherId])
+
+    res.json({
+      success:      true,
+      message:      planInfo.label + ' activated successfully!',
+      subscription: updated,
+      expires_at:   expiresAt.toISOString(),
+      days:         planInfo.days,
+    })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+module.exports = { router, createTrialSubscription, PLANS }

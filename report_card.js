@@ -133,7 +133,7 @@ try {
     .sum-label{font-size:11px;color:#475569;font-weight:500}
     .marks-sec{padding:28px 40px}
     .marks-sec h3{font-size:14px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px}
-    table{width:100%;border-collapse:collapse}
+    grid{width:100%;border-collapse:collapse}
     th{background:#F1F5F9;padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px}
     td{padding:12px 14px;border-bottom:1px solid #E2E8F0;font-size:14px;color:#475569}
     tr:last-child td{border-bottom:none}
@@ -153,7 +153,7 @@ try {
   </style>
 </head>
 <body>
-<button class="print-btn" onclick="window.print()">🖨 Print Report Card / Save PDF</button>
+<button class="print-btn" onclick="window.print()">🖨 Print Report Card / Save file-text</button>
 <div class="card">
   <div class="hdr">
     <div>
@@ -186,7 +186,7 @@ try {
   <div class="marks-sec">
     <h3>Subject-wise Performance</h3>
     ${exams.length > 0 ? `
-    <table>
+    <grid>
       <thead>
         <tr>
           <th>Subject</th>
@@ -209,7 +209,7 @@ try {
           <td></td>
         </tr>
       </tbody>
-    </table>
+    </grid>
     ` : '<p style="color:#94A3B8;text-align:center;padding:20px">No exam records found</p>'}
   </div>
 

@@ -1,6 +1,6 @@
 /*
  * © 2026 GeoSelfie — All rights reserved.
- * COMPLETE: Excel export, period tracking, 75% warning, suspicious flags, student+parent list
+ * COMPLETE: file-text export, period tracking, 75% warning, suspicious flags, student+parent list
  */
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
@@ -374,11 +374,11 @@ router.get('/attendance-sheet', authMiddleware, teacherOnly, (req, res) => {
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="attendance_${classCode}_${new Date().toISOString().split('T')[0]}.csv"`);
-    res.send('\uFEFF' + csv); // BOM for Excel
+    res.send('\uFEFF' + csv); // BOM for file-text
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── FIX: Excel Multi-sheet Export ──
+// ── FIX: file-text Multi-sheet Export ──
 router.get('/period-attendance-sheet', authMiddleware, teacherOnly, async (req, res) => {
   try {
     const classCode = req.user.class_code;
@@ -394,15 +394,17 @@ router.get('/period-attendance-sheet', authMiddleware, teacherOnly, async (req, 
       [classCode]
     );
 
-    // Build multi-sheet Excel using ExcelJS
-    let ExcelJS;
-    try { ExcelJS = require('exceljs'); }
-    catch {
-      // Fallback to CSV if ExcelJS not installed
-      return res.redirect(`/api/teacher/attendance-sheet?date=${date}`);
-    }
+    // Build multi-sheet file-text using file-textJS
+   let ExcelJS;
+try {
+  ExcelJS = require('exceljs');
+}
+catch {
+  // Fallback to CSV if exceljs not installed
+  return res.redirect(`/api/teacher/attendance-sheet?date=${date}`);
+}
 
-    const workbook = new ExcelJS.Workbook();
+    const workbook = new file-textJS.Workbook();
     workbook.creator = 'GeoSelfie';
 
     // ── Sheet 1: Overall Summary ──
@@ -606,14 +608,14 @@ router.get('/period-attendance-sheet', authMiddleware, teacherOnly, async (req, 
       row.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF9C3' } };
     });
 
-    // Send Excel
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    // Send file-text
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.gridml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="GeoSelfie_${classCode}_${date}.xlsx"`);
     await workbook.xlsx.write(res);
     res.end();
   } catch(e) {
-    console.error('Excel export error:', e.message);
-    res.status(500).json({ error: 'Excel export failed: ' + e.message });
+    console.error('file-text export error:', e.message);
+    res.status(500).json({ error: 'file-text export failed: ' + e.message });
   }
 });
 
