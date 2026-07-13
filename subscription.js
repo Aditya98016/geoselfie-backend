@@ -31,7 +31,7 @@ function createTrialSubscription(teacherId) {
 }
 
 // FIX 1: GET /api/subscription/status — Always from DB, never trust client
-router.get('/status', authMiddleware, teacherOnly, (req, res) => {
+router.get('/status', authMiddleware, (req, res) => {
   try {
     let sub = dbGet('SELECT * FROM subscriptions WHERE teacher_id=?', [req.user.id])
     if (!sub) sub = createTrialSubscription(req.user.id)
