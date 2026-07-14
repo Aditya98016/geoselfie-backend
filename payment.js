@@ -101,7 +101,7 @@ router.post('/verify', authMiddleware, teacherOnly, async (req, res) => {
     const expiresAt = new Date(now.getTime() + planInfo.days * 24 * 60 * 60 * 1000)
 
     dbRun(`UPDATE subscriptions SET
-      plan=?, status='active', is_active=1, starts_at=?, expires_at=?, days_left=?,
+      plan=?, status='active', is_active=1, started_at=?, expires_at=?, days_left=?,
       razorpay_payment_id=?, razorpay_order_id=?, updated_at=?
       WHERE teacher_id=?`,
       [plan, now.toISOString(), expiresAt.toISOString(), planInfo.days,
