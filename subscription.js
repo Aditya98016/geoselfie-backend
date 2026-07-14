@@ -24,7 +24,7 @@ function createTrialSubscription(teacherId) {
   const id  = uuidv4()
   const now = new Date().toISOString()
   dbRun(`INSERT INTO subscriptions
-    (id,teacher_id,plan,status,is_active,trial_used,starts_at,expires_at,days_left,created_at)
+    (id,teacher_id,plan,status,is_active,trial_used,started_at,expires_at,days_left,created_at)
     VALUES (?,?,'none','inactive',0,0,NULL,NULL,0,?)`,
     [id, teacherId, now])
   return dbGet('SELECT * FROM subscriptions WHERE teacher_id=?', [teacherId])
@@ -95,7 +95,7 @@ router.post('/activate', authMiddleware, teacherOnly, (req, res) => {
     dbRun(`UPDATE subscriptions SET
       plan=?, status='active', is_active=1,
       trial_used=CASE WHEN ? = 'trial' THEN 1 ELSE trial_used END,
-      starts_at=?, expires_at=?, days_left=?,
+      started_at=?, expires_at=?, days_left=?,
       razorpay_payment_id=?, razorpay_order_id=?,
       updated_at=?
       WHERE teacher_id=?`,
