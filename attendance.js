@@ -6,8 +6,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { dbGet, dbAll, dbRun } = require('./database');
 const { isInsideGeofence, isCollegeTime, detectFakeGPS } = require('./geofence');
-const { authMiddleware } = require('./middleware');
-
+const { authMiddleware, teacherOnly } = require('./middleware');
 const router  = express.Router();
 const todayDate = () => new Date().toISOString().split('T')[0];
 const nowISO    = () => new Date().toISOString();
