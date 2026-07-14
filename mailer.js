@@ -27,15 +27,15 @@ function getTransporter() {
   });
 
   // Connection test
-_transporter.verify((err, success) => {
-  if (err) {
-    console.error('❌ SMTP Error:', err.message)
-    console.log('💡 Fix: myaccount.google.com → Security → 2-Step ON → App Passwords → Generate')
-    _transporter = null
-  } else {
-    console.log('✅ Gmail SMTP ready — OTPs will go to ANY email address')
-  }
-})
+  _transporter.verify((err) => {
+    if (err) {
+      console.error('❌ Email config error:', err.message);
+      console.log('💡 Check EMAIL_USER and EMAIL_PASS in .env');
+      _transporter = null;
+    } else {
+      console.log('✅ Email server connected — real OTPs will be sent');
+    }
+  });
 
   return _transporter;
 }
@@ -69,7 +69,8 @@ async function sendMail(to, subject, html) {
 }
 
 async function sendOTPEmail(email, otp, name = 'User') {
-  console.log(`\n🔑 OTP for ${email}: ${otp}\n`) // always console mein
+  // Always print to console for dev fallback
+  console.log(`\n🔑 OTP for ${email}: [ ${otp} ] (10 min valid)\n`);
 
   return sendMail(email, 'GeoSelfie — Email Verification OTP', `
     <div style="font-family:Inter,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#F1F5F9;border-radius:16px;">

@@ -16,7 +16,6 @@ const { setupDatabase, dbAll, dbRun, dbGet } = require('./database')
 const setupSocket = require('./socket')
 
 const app    = express()
-
 const server = http.createServer(app)
 const io     = new Server(server, {
   cors:          { origin: '*', methods: ['GET','POST'] },

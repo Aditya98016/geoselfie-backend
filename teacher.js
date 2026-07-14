@@ -1,6 +1,6 @@
 /*
  * © 2026 GeoSelfie — All rights reserved.
- * COMPLETE: file-text export, period tracking, 75% warning, suspicious flags, student+parent list
+ * COMPLETE: Excel export, period tracking, 75% warning, suspicious flags, student+parent list
  */
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
@@ -374,11 +374,113 @@ router.get('/attendance-sheet', authMiddleware, teacherOnly, (req, res) => {
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="attendance_${classCode}_${new Date().toISOString().split('T')[0]}.csv"`);
-    res.send('\uFEFF' + csv); // BOM for file-text
+    res.send('\uFEFF' + csv); // BOM for Excel
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── FIX: file-text Multi-sheet Export ──
+// GET /api/teacher/attendance-csv?type=daily|monthly|period|overall
+router.get('/attendance-csv', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const classCode = req.user.class_code
+    const { type = 'overall', date, month } = req.query
+    const college   = dbGet('SELECT college_name FROM classes WHERE class_code=?', [classCode])
+    const students  = dbAll(
+      'SELECT id,name,roll_no FROM users WHERE class_code=? AND role=? ORDER BY CAST(roll_no AS INTEGER)',
+      [classCode, 'student']
+    )
+
+    let csv = `GeoSelfie Attendance — ${type.toUpperCase()}\n`
+    csv += `Class: ${classCode} | ${college?.college_name||''}\n`
+    csv += `Generated: ${new Date().toLocaleDateString('en-IN')}\n\n`
+
+    if (type === 'daily') {
+      // Today's attendance
+      const today = date || new Date().toISOString().split('T')[0]
+      csv += `Date: ${today}\n\n`
+      csv += `Roll No,Name,Status,Time on Campus,Entry Time,Exit Time\n`
+      students.forEach(stu => {
+        const s = dbGet(
+          'SELECT status,total_minutes,entry_time,exit_time FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',
+          [stu.id, today]
+        )
+        const mins  = s?.total_minutes || 0
+        const hrs   = `${Math.floor(mins/60)}h ${mins%60}m`
+        const entry = s?.entry_time ? new Date(s.entry_time).toLocaleTimeString('en-IN') : '-'
+        const exit  = s?.exit_time  ? new Date(s.exit_time).toLocaleTimeString('en-IN')  : '-'
+        csv += `${stu.roll_no||''},${stu.name||''},${s?.status||'absent'},${hrs},${entry},${exit}\n`
+      })
+
+    } else if (type === 'monthly') {
+      // Month-wise
+      const targetMonth = month || new Date().toISOString().slice(0,7)
+      csv += `Month: ${targetMonth}\n\n`
+      const monthDates = dbAll(`
+        SELECT DISTINCT date FROM attendance_sessions WHERE class_code=? AND date LIKE ? AND period_number=0
+        ORDER BY date
+      `, [classCode, `${targetMonth}%`])
+
+      csv += `Roll No,Name,${monthDates.map(d=>d.date).join(',')},Total Days,Present,Percentage\n`
+      students.forEach(stu => {
+        const row = [stu.roll_no||'', `"${stu.name||''}"`]
+        let present = 0
+        monthDates.forEach(d => {
+          const att = dbGet('SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0', [stu.id,d.date])
+          const st  = att?.status==='present' ? 'P' : 'A'
+          if (st==='P') present++
+          row.push(st)
+        })
+        const pct = monthDates.length>0 ? Math.round((present/monthDates.length)*100) : 0
+        row.push(monthDates.length, present, `${pct}%`)
+        csv += row.join(',') + '\n'
+      })
+
+    } else if (type === 'period') {
+      // Period-wise
+      const targetDate = date || new Date().toISOString().split('T')[0]
+      csv += `Date: ${targetDate} — Period-wise\n\n`
+      const periods = dbAll('SELECT * FROM periods WHERE class_code=? ORDER BY period_number', [classCode])
+      csv += `Roll No,Name,${periods.map(p=>`P${p.period_number}(${p.subject})`).join(',')}\n`
+      students.forEach(stu => {
+        const row = [stu.roll_no||'', `"${stu.name||''}"`]
+        periods.forEach(p => {
+          const att = dbGet(
+            'SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=?',
+            [stu.id, targetDate, p.period_number]
+          )
+          row.push(att?.status==='present' ? 'P' : 'A')
+        })
+        csv += row.join(',') + '\n'
+      })
+
+    } else {
+      // Overall (default)
+      const dates = dbAll(`
+        SELECT DISTINCT date FROM attendance_sessions WHERE class_code=? AND period_number=0
+        ORDER BY date DESC LIMIT 30
+      `, [classCode])
+      csv += `Roll No,Name,${dates.map(d=>d.date).join(',')},Total Days,Present,Absent,Percentage,Status\n`
+      students.forEach(stu => {
+        const row = [stu.roll_no||'', `"${stu.name||''}"`]
+        let present = 0
+        dates.forEach(d => {
+          const att = dbGet('SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',[stu.id,d.date])
+          const st  = att?.status==='present' ? 'P' : 'A'
+          if (st==='P') present++
+          row.push(st)
+        })
+        const total = dates.length
+        const pct   = total>0 ? Math.round((present/total)*100) : 0
+        row.push(total, present, total-present, `${pct}%`, pct<75?'WARNING':'OK')
+        csv += row.join(',') + '\n'
+      })
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="GeoSelfie_${type}_${classCode}.csv"`)
+    res.send('\uFEFF' + csv)
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+// ── FIX: Excel Multi-sheet Export ──
 router.get('/period-attendance-sheet', authMiddleware, teacherOnly, async (req, res) => {
   try {
     const classCode = req.user.class_code;
@@ -394,17 +496,15 @@ router.get('/period-attendance-sheet', authMiddleware, teacherOnly, async (req, 
       [classCode]
     );
 
-    // Build multi-sheet file-text using file-textJS
-   let ExcelJS;
-try {
-  ExcelJS = require('exceljs');
-}
-catch {
-  // Fallback to CSV if exceljs not installed
-  return res.redirect(`/api/teacher/attendance-sheet?date=${date}`);
-}
+    // Build multi-sheet Excel using ExcelJS
+    let ExcelJS;
+    try { ExcelJS = require('exceljs'); }
+    catch {
+      // Fallback to CSV if ExcelJS not installed
+      return res.redirect(`/api/teacher/attendance-sheet?date=${date}`);
+    }
 
-    const workbook = new file-textJS.Workbook();
+    const workbook = new ExcelJS.Workbook();
     workbook.creator = 'GeoSelfie';
 
     // ── Sheet 1: Overall Summary ──
@@ -608,118 +708,15 @@ catch {
       row.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF9C3' } };
     });
 
-    // Send file-text
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.gridml.sheet');
+    // Send Excel
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="GeoSelfie_${classCode}_${date}.xlsx"`);
     await workbook.xlsx.write(res);
     res.end();
   } catch(e) {
-    console.error('file-text export error:', e.message);
-    res.status(500).json({ error: 'file-text export failed: ' + e.message });
+    console.error('Excel export error:', e.message);
+    res.status(500).json({ error: 'Excel export failed: ' + e.message });
   }
 });
-
-// GET /api/teacher/attendance-csv?type=daily|monthly|period|overall
-router.get('/attendance-csv', authMiddleware, teacherOnly, (req, res) => {
-  try {
-    const classCode = req.user.class_code
-    const { type = 'overall', date, month } = req.query
-    const college   = dbGet('SELECT college_name FROM classes WHERE class_code=?', [classCode])
-    const students  = dbAll(
-      'SELECT id,name,roll_no FROM users WHERE class_code=? AND role=? ORDER BY CAST(roll_no AS INTEGER)',
-      [classCode, 'student']
-    )
-
-    let csv = `GeoSelfie Attendance — ${type.toUpperCase()}\n`
-    csv += `Class: ${classCode} | ${college?.college_name||''}\n`
-    csv += `Generated: ${new Date().toLocaleDateString('en-IN')}\n\n`
-
-    if (type === 'daily') {
-      // Today's attendance
-      const today = date || new Date().toISOString().split('T')[0]
-      csv += `Date: ${today}\n\n`
-      csv += `Roll No,Name,Status,Time on Campus,Entry Time,Exit Time\n`
-      students.forEach(stu => {
-        const s = dbGet(
-          'SELECT status,total_minutes,entry_time,exit_time FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',
-          [stu.id, today]
-        )
-        const mins  = s?.total_minutes || 0
-        const hrs   = `${Math.floor(mins/60)}h ${mins%60}m`
-        const entry = s?.entry_time ? new Date(s.entry_time).toLocaleTimeString('en-IN') : '-'
-        const exit  = s?.exit_time  ? new Date(s.exit_time).toLocaleTimeString('en-IN')  : '-'
-        csv += `${stu.roll_no||''},${stu.name||''},${s?.status||'absent'},${hrs},${entry},${exit}\n`
-      })
-
-    } else if (type === 'monthly') {
-      // Month-wise
-      const targetMonth = month || new Date().toISOString().slice(0,7)
-      csv += `Month: ${targetMonth}\n\n`
-      const monthDates = dbAll(`
-        SELECT DISTINCT date FROM attendance_sessions WHERE class_code=? AND date LIKE ? AND period_number=0
-        ORDER BY date
-      `, [classCode, `${targetMonth}%`])
-
-      csv += `Roll No,Name,${monthDates.map(d=>d.date).join(',')},Total Days,Present,Percentage\n`
-      students.forEach(stu => {
-        const row = [stu.roll_no||'', `"${stu.name||''}"`]
-        let present = 0
-        monthDates.forEach(d => {
-          const att = dbGet('SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0', [stu.id,d.date])
-          const st  = att?.status==='present' ? 'P' : 'A'
-          if (st==='P') present++
-          row.push(st)
-        })
-        const pct = monthDates.length>0 ? Math.round((present/monthDates.length)*100) : 0
-        row.push(monthDates.length, present, `${pct}%`)
-        csv += row.join(',') + '\n'
-      })
-
-    } else if (type === 'period') {
-      // Period-wise
-      const targetDate = date || new Date().toISOString().split('T')[0]
-      csv += `Date: ${targetDate} — Period-wise\n\n`
-      const periods = dbAll('SELECT * FROM periods WHERE class_code=? ORDER BY period_number', [classCode])
-      csv += `Roll No,Name,${periods.map(p=>`P${p.period_number}(${p.subject})`).join(',')}\n`
-      students.forEach(stu => {
-        const row = [stu.roll_no||'', `"${stu.name||''}"`]
-        periods.forEach(p => {
-          const att = dbGet(
-            'SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=?',
-            [stu.id, targetDate, p.period_number]
-          )
-          row.push(att?.status==='present' ? 'P' : 'A')
-        })
-        csv += row.join(',') + '\n'
-      })
-
-    } else {
-      // Overall (default)
-      const dates = dbAll(`
-        SELECT DISTINCT date FROM attendance_sessions WHERE class_code=? AND period_number=0
-        ORDER BY date DESC LIMIT 30
-      `, [classCode])
-      csv += `Roll No,Name,${dates.map(d=>d.date).join(',')},Total Days,Present,Absent,Percentage,Status\n`
-      students.forEach(stu => {
-        const row = [stu.roll_no||'', `"${stu.name||''}"`]
-        let present = 0
-        dates.forEach(d => {
-          const att = dbGet('SELECT status FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',[stu.id,d.date])
-          const st  = att?.status==='present' ? 'P' : 'A'
-          if (st==='P') present++
-          row.push(st)
-        })
-        const total = dates.length
-        const pct   = total>0 ? Math.round((present/total)*100) : 0
-        row.push(total, present, total-present, `${pct}%`, pct<75?'WARNING':'OK')
-        csv += row.join(',') + '\n'
-      })
-    }
-
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
-    res.setHeader('Content-Disposition', `attachment; filename="GeoSelfie_${type}_${classCode}.csv"`)
-    res.send('\uFEFF' + csv)
-  } catch(e) { res.status(500).json({ error: e.message }) }
-})
 
 module.exports = router;

@@ -1,7 +1,4 @@
 /*
- * © 2026 GeoSelfie v2.0 — All rights reserved.
- */
-/*
  * FIX: parent_code linking corrected
  */
 const express = require('express');
@@ -43,12 +40,15 @@ router.get('/child-info', authMiddleware, (req, res) => {
       console.log('Method 2 result:', student?.name || 'not found');
     }
 
-    // FIX Method 3: student_unique_code from registration
+    // FIX Method 3: student_unique_code se match karo
+    // (jab parent ne STU-XXXXXXXX daala tha register karte waqt)
+    // Method 3: Student unique code linking
 if (!student && parent.parent_code) {
   student = dbGet(
     'SELECT * FROM users WHERE unique_code=? AND role=?',
     [parent.parent_code, 'student']
   );
+  console.log('Method 3 result:', student?.name || 'not found');
 }
 
     if (!student) {
@@ -60,16 +60,13 @@ if (!student && parent.parent_code) {
     }
 
     console.log('Student found:', student.name);
-console.log('Student found:', student.name);
 
-// FIX 8: Auto update parent class_code
-if (!parent.class_code && student.class_code) {
+    if (!parent.class_code && student.class_code) {
   dbRun(
     'UPDATE users SET class_code=? WHERE id=?',
     [student.class_code, parent.id]
   );
 }
-
 
     const today   = new Date().toISOString().split('T')[0];
     const session = dbGet(
@@ -122,14 +119,6 @@ router.get('/homework-status', authMiddleware, (req, res) => {
     if (!student && parent?.class_code) {
       student = dbGet('SELECT * FROM users WHERE class_code=? AND role=? LIMIT 1', [parent.class_code, 'student']);
     }
-
-    // FIX 8: Method 3
-if (!student && parent?.parent_code) {
-  student = dbGet(
-    'SELECT * FROM users WHERE unique_code=? AND role=?',
-    [parent.parent_code, 'student']
-  );
-}
 
     if (!student) return res.json({ homework: [] });
 

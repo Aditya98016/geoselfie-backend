@@ -194,7 +194,7 @@ router.get('/invoice-html/:id', authMiddleware, (req, res) => {
   .detail-box { background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:14px; }
   .detail-box p { font-size:13px; color:#475569; margin-bottom:3px; }
   .detail-box strong { font-size:14px; color:#0F172A; }
-  grid { width:100%; border-collapse:collapse; }
+  table { width:100%; border-collapse:collapse; }
   th { background:#1A56DB; color:#fff; padding:10px 14px; text-align:left; font-size:13px; }
   td { padding:10px 14px; border-bottom:1px solid #E2E8F0; font-size:13px; }
   .total-row td { font-weight:700; font-size:15px; background:#ECFDF5; color:#059669; }
@@ -233,7 +233,7 @@ router.get('/invoice-html/:id', authMiddleware, (req, res) => {
   </div>
 
   <div class="section">
-    <grid>
+    <table>
       <tr>
         <th>Description</th>
         <th>Duration</th>
@@ -253,7 +253,7 @@ router.get('/invoice-html/:id', authMiddleware, (req, res) => {
         <td colspan="2">Total Amount Paid</td>
         <td>₹${inv.total_amount.toFixed(2)}</td>
       </tr>
-    </grid>
+    </table>
   </div>
 
   <div class="footer">
