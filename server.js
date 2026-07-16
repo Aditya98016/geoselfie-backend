@@ -33,6 +33,7 @@ app.use(helmet({
   contentSecurityPolicy:       false,
 }))
 app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','PATCH','OPTIONS'] }))
+app.use('/api/webhook', require('./webhook'))
 app.use(express.json({ limit: '20mb' }))
 app.use(express.urlencoded({ extended: true, limit: '20mb' }))
 

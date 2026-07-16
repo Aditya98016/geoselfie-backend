@@ -10,6 +10,8 @@ const { authMiddleware, teacherOnly } = require('./middleware')
 const { PLANS } = require('./subscription')
 
 const router = express.Router()
+// Temporary signed invoice tokens
+const invoiceTokens = new Map()
 
 const RZP_KEY_ID     = process.env.RAZORPAY_KEY_ID     || ''
 const RZP_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || ''
@@ -268,6 +270,44 @@ router.get('/invoice-html/:id', authMiddleware, (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename="${inv.invoice_number}.html"`)
     res.send(html)
   } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+router.get('/invoice-token/:id', authMiddleware, (req, res) => {
+  try {
+    const inv = dbGet(
+      'SELECT * FROM invoices WHERE id=? AND teacher_id=?',
+      [req.params.id, req.user.id]
+    )
+
+    if (!inv) {
+      return res.status(404).json({ error: 'Invoice not found' })
+    }
+
+    const token = crypto.randomBytes(32).toString('hex')
+    const expiresAt = Date.now() + 5 * 60 * 1000
+
+    invoiceTokens.set(token, {
+      invoiceId: req.params.id,
+      teacherId: req.user.id,
+      expiresAt
+    })
+
+    for (const [k, v] of invoiceTokens) {
+      if (v.expiresAt < Date.now()) {
+        invoiceTokens.delete(k)
+      }
+    }
+
+    const BASE_URL = (process.env.APP_URL || 'https://geoselfie-backend.onrender.com').replace(/\/$/, '')
+
+    res.json({
+      signed_url: `${BASE_URL}/api/payment/invoice-view/${token}`,
+      expires_in: 300
+    })
+
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 module.exports = router
