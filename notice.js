@@ -72,11 +72,24 @@ router.post('/create', authMiddleware, teacherOnly, upload.single('attachment'),
       attachMime = req.file.mimetype
     }
 
-    dbRun(`INSERT INTO notices
-      (id,class_code,teacher_id,title,content,type,is_emergency,attachment_url,attachment_name,attachment_size,attachment_mime,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, classCode, req.user.id, title.trim(), content.trim(),
-       type, is_emergency ? 1 : 0, attachUrl, attachName, attachSize, attachMime, now])
+   dbRun(`INSERT INTO notices
+(id,posted_by,class_code,title,content,type,is_emergency,
+attachment_url,attachment_name,attachment_size,attachment_mime,created_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+[
+  id,
+  req.user.id,
+  classCode,
+  title.trim(),
+  content.trim(),
+  type,
+  is_emergency ? 1 : 0,
+  attachUrl,
+  attachName,
+  attachSize,
+  attachMime,
+  now
+])
 
     // FIX 7: Notify all students
     const notifTitle = (is_emergency ? '🚨 EMERGENCY: ' : '📢 ') + title.trim()
