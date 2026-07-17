@@ -220,4 +220,39 @@ router.get('/login-as/:userId', authMiddleware, adminOnly, (req, res) => {
   res.json({ token, user: { id:user.id, name:user.name, email:user.email, role:user.role } });
 });
 
+// GET /api/admin/feedback
+router.get('/feedback', authMiddleware, adminOnly, (req, res) => {
+  let feedback = [];
+  let tickets = [];
+
+  // Feedback table
+  try {
+    feedback = dbAll(
+      `SELECT *
+       FROM feedback
+       ORDER BY created_at DESC`,
+      []
+    );
+  } catch (e) {
+    console.log('feedback table not found');
+  }
+
+  // Support tickets table
+  try {
+    tickets = dbAll(
+      `SELECT *
+       FROM support_tickets
+       ORDER BY created_at DESC`,
+      []
+    );
+  } catch (e) {
+    console.log('support_tickets table not found');
+  }
+
+  res.json({
+    feedback,
+    tickets,
+  });
+});
+
 module.exports = router;
