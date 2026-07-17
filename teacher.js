@@ -719,4 +719,122 @@ router.get('/period-attendance-sheet', authMiddleware, teacherOnly, async (req, 
   }
 });
 
+// ─────────────────────────────────────────────
+// Reset School Data
+// POST /api/teacher/reset-school-data
+// ─────────────────────────────────────────────
+router.post('/reset-school-data', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const {
+      reset_attendance,
+      reset_academics,
+      reset_chats,
+      reset_notices
+    } = req.body;
+
+    const classCode = req.user.class_code;
+
+    if (reset_attendance) {
+
+      const students = dbAll(
+        'SELECT id FROM users WHERE class_code=? AND role=?',
+        [classCode, 'student']
+      );
+
+      students.forEach(s => {
+        dbRun('DELETE FROM attendance_sessions WHERE student_id=?', [s.id]);
+        dbRun('DELETE FROM verify_logs WHERE student_id=?', [s.id]);
+        dbRun('DELETE FROM location_events WHERE student_id=?', [s.id]);
+        dbRun('DELETE FROM correction_requests WHERE student_id=?', [s.id]);
+        dbRun('DELETE FROM offline_queue WHERE student_id=?', [s.id]);
+      });
+
+      dbRun(
+        'UPDATE classes SET auto_verify_active=0, last_verify_sent_at=NULL WHERE class_code=?',
+        [classCode]
+      );
+    }
+
+    if (reset_academics) {
+
+      dbRun('DELETE FROM homework WHERE class_code=?', [classCode]);
+
+      dbRun('DELETE FROM exams WHERE class_code=?', [classCode]);
+
+      const students = dbAll(
+        'SELECT id FROM users WHERE class_code=? AND role=?',
+        [classCode, 'student']
+      );
+
+      students.forEach(s => {
+        dbRun('DELETE FROM homework_submissions WHERE student_id=?', [s.id]);
+        dbRun('DELETE FROM marks WHERE student_id=?', [s.id]);
+        dbRun('DELETE FROM report_cards WHERE student_id=?', [s.id]);
+      });
+
+    }
+
+    if (reset_chats) {
+
+      const chatIds = dbAll(`
+        SELECT DISTINCT chat_id
+        FROM chat_members
+        WHERE user_id IN (
+          SELECT id FROM users WHERE class_code=?
+        )
+      `,[classCode]);
+
+      chatIds.forEach(c => {
+
+        dbRun(
+          'DELETE FROM message_reads WHERE message_id IN (SELECT id FROM messages WHERE chat_id=?)',
+          [c.chat_id]
+        );
+
+        dbRun(
+          'DELETE FROM messages WHERE chat_id=?',
+          [c.chat_id]
+        );
+
+      });
+
+    }
+
+    if (reset_notices) {
+
+      dbRun(
+        'DELETE FROM notices WHERE class_code=?',
+        [classCode]
+      );
+
+      dbRun(
+        'DELETE FROM notice_reads WHERE notice_id NOT IN (SELECT id FROM notices)'
+      );
+
+      dbRun(
+        'UPDATE qr_sessions SET is_active=0 WHERE class_code=?',
+        [classCode]
+      );
+
+    }
+
+    res.json({
+      success: true,
+      message: 'School data reset successfully. Accounts are preserved.',
+      reset: {
+        attendance: !!reset_attendance,
+        academics: !!reset_academics,
+        chats: !!reset_chats,
+        notices: !!reset_notices
+      }
+    });
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({
+      error: e.message
+    });
+  }
+});
+
 module.exports = router;
