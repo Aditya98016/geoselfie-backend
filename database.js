@@ -548,6 +548,25 @@ async function setupDatabase() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_chat_members      ON chat_members(user_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_payments_teacher  ON payments(teacher_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_invoices_teacher  ON invoices(teacher_id)`)
+  // ── AUTO MIGRATIONS ──
+const migrations = [
+  "ALTER TABLE leave_requests ADD COLUMN attachment_type TEXT",
+
+  "ALTER TABLE notices ADD COLUMN teacher_id TEXT",
+  "ALTER TABLE notices ADD COLUMN attachment_type TEXT",
+
+  "ALTER TABLE homework ADD COLUMN teacher_id TEXT",
+  "ALTER TABLE exams ADD COLUMN attachment_type TEXT",
+]
+
+migrations.forEach(sql => {
+  try {
+    db.run(sql)
+    console.log("✓ Migration:", sql)
+  } catch (e) {
+    // Ignore if column already exists
+  }
+})
 
   save()
   console.log('✅ GeoSelfie Database ready! All tables created.')
