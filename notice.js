@@ -66,12 +66,15 @@ router.post('/create', authMiddleware, teacherOnly, upload.single('attachment'),
     let attachMime = null
 
     if (req.file) {
-      attachUrl  = '/uploads/notices/' + req.file.filename
-      attachName = req.file.originalname
-      attachSize = req.file.size
-      attachMime = req.file.mimetype
-    }
+  attachUrl  = '/uploads/notices/' + req.file.filename
+  attachName = req.file.originalname
+  attachSize = req.file.size
+  attachMime = req.file.mimetype
 
+  console.log('===== NOTICE FILE =====')
+  console.log(req.file)
+  console.log('Attachment URL:', attachUrl)
+}
    dbRun(`INSERT INTO notices
 (id,posted_by,class_code,title,content,type,is_emergency,
 attachment_url,attachment_name,attachment_size,attachment_mime,created_at)
@@ -90,6 +93,13 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
   attachMime,
   now
 ])
+
+const saved = dbGet(
+  'SELECT attachment_url, attachment_name FROM notices WHERE id=?',
+  [id]
+)
+
+console.log('Saved notice:', saved)
 
     // FIX 7: Notify all students
     const notifTitle = (is_emergency ? '🚨 EMERGENCY: ' : '📢 ') + title.trim()
