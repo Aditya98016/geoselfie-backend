@@ -11,7 +11,7 @@
  */
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { dbGet, dbAll, dbRun } = require('./database');
+const { dbGet, dbAll, dbRun, onDbReady } = require('./database');
 const { isInsideGeofence, isCollegeTime, detectFakeGPS } = require('./geofence');
 const { authMiddleware, teacherOnly } = require('./middleware');
 const router = express.Router();
@@ -56,7 +56,13 @@ function ensureSchema() {
   safeRun(`CREATE INDEX IF NOT EXISTS idx_verify_sent_at ON verify_logs(sent_at)`);
   safeRun(`CREATE INDEX IF NOT EXISTS idx_location_events_student ON location_events(student_id, timestamp)`);
 }
-ensureSchema();
+// FIX (dbRun error: Cannot read properties of undefined (reading 'run')):
+// this file is require()'d — and ensureSchema() used to run immediately
+// — before setupDatabase() (in database.js) has finished initializing
+// sql.js, so `db` was still undefined and every dbRun() call here
+// crashed/no-op'd, meaning audit_logs + several indexes never got
+// created. Defer this until the DB is actually ready.
+onDbReady(ensureSchema);
 
 // ─────────────────────────────────────────────────────────
 // Transaction helper — Improvement #1
@@ -728,3 +734,5 @@ router.get('/pending-verify', authMiddleware, (req, res) => {
 });
 
 module.exports = router;
+
+

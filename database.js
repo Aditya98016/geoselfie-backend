@@ -10,6 +10,31 @@ const initSqlJs = require('sql.js')
 let db
 const DB_PATH = path.resolve('./geoselfie.db')
 
+// ─────────────────────────────────────────────────────────
+// FIX (dbRun undefined 'run' crash): sql.js init is async, but other
+// modules (e.g. attendance.js) call dbRun(...) synchronously as soon as
+// they are require()'d — which can happen before setupDatabase() has
+// finished (or even started). Any code that needs to run schema
+// statements against `db` must wait for it to exist instead of racing
+// it. onDbReady(fn) runs `fn` immediately if the DB is already up, or
+// queues it to run the moment setupDatabase() finishes.
+// ─────────────────────────────────────────────────────────
+let isDbReady = false
+const readyCallbacks = []
+
+function onDbReady(fn) {
+  if (isDbReady) fn()
+  else readyCallbacks.push(fn)
+}
+
+function markDbReady() {
+  isDbReady = true
+  while (readyCallbacks.length) {
+    const fn = readyCallbacks.shift()
+    try { fn() } catch (e) { console.error('onDbReady callback failed:', e.message) }
+  }
+}
+
 async function setupDatabase() {
   const SQL = await initSqlJs()
 
@@ -581,6 +606,7 @@ migrations.forEach(sql => {
 
   save()
   console.log('✅ GeoSelfie Database ready! All tables created.')
+  markDbReady() // FIX: let anything queued via onDbReady() run now that `db` exists
   return { db, save }
 }
 
@@ -616,6 +642,12 @@ function dbAll(sql, params = []) {
 }
 
 function dbRun(sql, params = []) {
+
+  if (!db) {
+    console.error("❌ Database not initialized yet.")
+    return { changes: 0 }
+  }
+
   try {
     db.run(sql, params)
     return { changes: db.getRowsModified() }
@@ -625,4 +657,5 @@ function dbRun(sql, params = []) {
   }
 }
 
-module.exports = { setupDatabase, dbGet, dbAll, dbRun }
+module.exports = { setupDatabase, dbGet, dbAll, dbRun, onDbReady }
+

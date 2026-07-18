@@ -60,10 +60,10 @@ const upload = multer({ storage, limits:{ fileSize:25*1024*1024 }, fileFilter:(r
 // ── HOMEWORK ──
 
 router.post(
-  '/homework/:id/submit',
+  '/homework',
   authMiddleware,
   (req, res, next) => {
-    upload.single('file')(req, res, (err) => {
+    upload.single('attachment')(req, res, (err) => {
       if (err) {
         console.log('========== MULTER ERROR ==========')
         console.log(err)
@@ -405,4 +405,3 @@ router.post('/report-card/:examId/open', authMiddleware, (req, res) => {
 })
 
 module.exports = router
-
