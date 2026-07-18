@@ -8,9 +8,24 @@ const path     = require('path')
 const { v4: uuidv4 }   = require('uuid')
 const { dbGet, dbRun, dbAll } = require('./database')
 const { authMiddleware, teacherOnly } = require('./middleware')
-const { createClassNotification } = require('./notifications')
+const { createClassNotification, findParentForStudent } = require('./notifications')
 
 const router  = express.Router()
+
+// NEW: Parents have no class_code of their own — resolve their linked
+// child's class_code so GET /list actually returns notices for them.
+// (Previously this silently returned an empty list for every parent.)
+function resolveClassCode(user) {
+  if (user.role !== 'parent') return user.class_code
+  const child =
+    dbGet('SELECT class_code FROM users WHERE unique_code=? AND role=?', [user.parent_code, 'student']) ||
+    dbGet(
+      `SELECT class_code FROM users WHERE role='student' AND id IN (
+         SELECT id FROM users WHERE parent_code=(SELECT unique_code FROM users WHERE id=?)
+       )`, [user.id]
+    )
+  return child ? child.class_code : user.class_code
+}
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = path.join(__dirname, 'uploads/notices')
@@ -26,26 +41,43 @@ const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } })
 // GET /api/notice/list
 router.get('/list', authMiddleware, (req, res) => {
   try {
-    const classCode = req.user.class_code
+    const classCode = resolveClassCode(req.user)
     const notices   = dbAll(
       'SELECT * FROM notices WHERE class_code=? ORDER BY created_at DESC LIMIT 50',
       [classCode]
     )
 
-    // Mark as read for this user
-    const now = new Date().toISOString()
-    notices.forEach(n => {
-      const exists = dbGet('SELECT id FROM notice_reads WHERE notice_id=? AND user_id=?', [n.id, req.user.id])
-      if (!exists) {
-        dbRun('INSERT INTO notice_reads (id,notice_id,user_id,read_at) VALUES (?,?,?,?)',
-          [uuidv4(), n.id, req.user.id, now])
-        // Mark notification as read
-        dbRun('UPDATE notifications SET is_read=1 WHERE user_id=? AND ref_id=? AND module=?',
-          [req.user.id, n.id, 'notice'])
-      }
+    // FIX (Section 1): "is_unread" now reflects this user's own live
+    // notification state instead of being force-marked read the moment
+    // the notice list is fetched. The badge for a specific notice only
+    // clears once the user actually opens THAT notice — see
+    // POST /notice/:id/open below.
+    const withFlags = notices.map(n => {
+      const notifUnread = dbGet(
+        'SELECT id FROM notifications WHERE user_id=? AND module=? AND ref_id=? AND is_read=0',
+        [req.user.id, 'notice', n.id]
+      )
+      const alreadyOpened = dbGet('SELECT id FROM notice_reads WHERE notice_id=? AND user_id=?', [n.id, req.user.id])
+      return { ...n, is_unread: !!notifUnread, is_opened: !!alreadyOpened }
     })
 
-    res.json({ notices })
+    res.json({ notices: withFlags })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/notice/:id/open
+// FIX (Section 1): Mark ONE notice as opened/read for the current user
+// — called when they actually open that specific notice.
+router.post('/:id/open', authMiddleware, (req, res) => {
+  try {
+    const exists = dbGet('SELECT id FROM notice_reads WHERE notice_id=? AND user_id=?', [req.params.id, req.user.id])
+    if (!exists) {
+      dbRun('INSERT INTO notice_reads (id,notice_id,user_id,read_at) VALUES (?,?,?,?)',
+        [uuidv4(), req.params.id, req.user.id, new Date().toISOString()])
+    }
+    dbRun('UPDATE notifications SET is_read=1 WHERE user_id=? AND ref_id=? AND module=?',
+      [req.user.id, req.params.id, 'notice'])
+    res.json({ success: true })
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
 

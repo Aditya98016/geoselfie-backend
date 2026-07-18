@@ -103,6 +103,22 @@ router.post('/mark-read', authMiddleware, (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
 
+// POST /api/notifications/mark-open
+// FIX: Per-item read status. Opening ONE homework/notice/report-card
+// should only clear the badge for that one item — not the whole
+// module/tab. Call this with the module name ('homework','notice',
+// 'report_card', etc) and the specific ref_id (homework id / notice
+// id / exam id) when the user actually opens that item.
+router.post('/mark-open', authMiddleware, (req, res) => {
+  try {
+    const { module: mod, ref_id } = req.body
+    if (!mod || !ref_id) return res.status(400).json({ error: 'module and ref_id required' })
+    dbRun('UPDATE notifications SET is_read=1 WHERE user_id=? AND module=? AND ref_id=?',
+      [req.user.id, mod, ref_id])
+    res.json({ success: true })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
 // POST /api/notifications/mark-all-read
 router.post('/mark-all-read', authMiddleware, (req, res) => {
   try {
@@ -111,4 +127,36 @@ router.post('/mark-all-read', authMiddleware, (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
 
-module.exports = { router, createNotification, createClassNotification }
+// NEW: Find the parent account linked to a given student id.
+// Reuses the same dual lookup convention already used in notice.js so
+// behaviour stays consistent across modules.
+function findParentForStudent(studentId) {
+  const { dbGet } = require('./database')
+  return (
+    dbGet('SELECT id FROM users WHERE parent_code=? AND role=?', [studentId, 'parent']) ||
+    dbGet(
+      'SELECT id FROM users WHERE unique_code=(SELECT parent_code FROM users WHERE id=?) AND role=?',
+      [studentId, 'parent']
+    )
+  )
+}
+
+// NEW: Notify a student and (if linked) their parent in one call.
+// Used by homework + report-card/marks notifications so both roles
+// always stay in sync without duplicating the lookup everywhere.
+function notifyStudentAndParent(studentId, type, title, body, module_, refId) {
+  createNotification(studentId, type, title, body, module_, refId)
+  const parent = findParentForStudent(studentId)
+  if (parent) createNotification(parent.id, type, title, body, module_, refId)
+}
+
+module.exports = {
+  router,
+  createNotification,
+  createClassNotification,
+  findParentForStudent,
+  notifyStudentAndParent,
+}
+
+
+

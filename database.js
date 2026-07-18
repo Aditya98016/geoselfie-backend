@@ -556,6 +556,7 @@ const migrations = [
   "ALTER TABLE notices ADD COLUMN attachment_type TEXT",
 
   "ALTER TABLE homework ADD COLUMN teacher_id TEXT",
+  "ALTER TABLE homework ADD COLUMN attachment_type TEXT",
   "ALTER TABLE exams ADD COLUMN attachment_type TEXT",
 ]
 
