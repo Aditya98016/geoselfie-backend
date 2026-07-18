@@ -52,6 +52,9 @@ router.get('/list', authMiddleware, (req, res) => {
 // POST /api/notice/create
 router.post('/create', authMiddleware, teacherOnly, upload.single('attachment'), (req, res) => {
   try {
+    console.log('===== NOTICE REQUEST =====')
+console.log('BODY:', req.body)
+console.log('FILE:', req.file)
     const { title, content, type = 'general', is_emergency = false } = req.body
     if (!title?.trim() || !content?.trim())
       return res.status(400).json({ error: 'Title and content required' })
