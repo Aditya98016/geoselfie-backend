@@ -86,25 +86,32 @@ async function setupDatabase() {
     UNIQUE(class_code, day, period_number)
   )`)
 
-  // ── ATTENDANCE SESSIONS ──
-  db.run(`CREATE TABLE IF NOT EXISTS attendance_sessions (
-    id TEXT PRIMARY KEY,
-    student_id TEXT NOT NULL,
-    class_code TEXT,
-    date TEXT NOT NULL,
-    period_id TEXT,
-    period_number INTEGER DEFAULT 0,
-    subject TEXT DEFAULT 'General',
-    entry_time DATETIME,
-    exit_time DATETIME,
-    total_minutes INTEGER DEFAULT 0,
-    accumulated_minutes INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'absent',
-    method TEXT DEFAULT 'auto',
-    fake_gps_detected INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(student_id, date, period_number)
-  )`)
+ // ── ATTENDANCE SESSIONS ──
+db.run(`CREATE TABLE IF NOT EXISTS attendance_sessions (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  class_code TEXT,
+  date TEXT NOT NULL,
+  period_id TEXT,
+  period_number INTEGER DEFAULT 0,
+  subject TEXT DEFAULT 'General',
+
+  entry_time DATETIME,
+  first_entry_time DATETIME,
+  last_entry_time DATETIME,
+  exit_time DATETIME,
+
+  total_minutes INTEGER DEFAULT 0,
+  accumulated_minutes INTEGER DEFAULT 0,
+  minutes_dirty INTEGER DEFAULT 0,
+
+  status TEXT DEFAULT 'absent',
+  method TEXT DEFAULT 'auto',
+  fake_gps_detected INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE(student_id, date, period_number)
+)`)
 
   // ── VERIFY LOGS ──
   db.run(`CREATE TABLE IF NOT EXISTS verify_logs (
@@ -558,6 +565,9 @@ const migrations = [
   "ALTER TABLE homework ADD COLUMN teacher_id TEXT",
   "ALTER TABLE homework ADD COLUMN attachment_type TEXT",
   "ALTER TABLE exams ADD COLUMN attachment_type TEXT",
+    "ALTER TABLE attendance_sessions ADD COLUMN first_entry_time TEXT",
+  "ALTER TABLE attendance_sessions ADD COLUMN last_entry_time TEXT",
+  "ALTER TABLE attendance_sessions ADD COLUMN minutes_dirty INTEGER DEFAULT 0",
 ]
 
 migrations.forEach(sql => {

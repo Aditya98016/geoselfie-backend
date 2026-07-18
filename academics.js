@@ -59,7 +59,28 @@ const upload = multer({ storage, limits:{ fileSize:25*1024*1024 }, fileFilter:(r
 
 // ── HOMEWORK ──
 
-router.post('/homework', authMiddleware, teacherOnly, upload.single('file'), (req, res) => {
+router.post(
+  '/homework/:id/submit',
+  authMiddleware,
+  (req, res, next) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) {
+        console.log('========== MULTER ERROR ==========')
+        console.log(err)
+        console.log('Field:', err.field)
+        console.log('Body:', req.body)
+        console.log('=================================')
+
+        return res.status(400).json({
+          error: err.message,
+          field: err.field,
+          code: err.code
+        })
+      }
+      next()
+    })
+  },
+  (req, res) => {
   try {
     const { subject, title, description, due_date } = req.body
     if (!subject?.trim()||!title?.trim()) return res.status(400).json({ error:'Subject and title required' })
