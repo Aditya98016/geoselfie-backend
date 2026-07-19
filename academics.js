@@ -186,6 +186,51 @@ router.post('/homework/:id/submit', authMiddleware, upload.single('file'), (req,
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
 
+// FIX (Fix #6 — Teacher Homework Submission Viewer): previously the
+// teacher could only see a submission_count on the homework list with
+// no way to open individual submissions. This reuses the existing
+// homework_submissions table (no new columns, no new tables) and the
+// same class-roster join style used across teacher.js — it does NOT
+// duplicate /homework/:id/submit or /homework/:id/grade, it just
+// exposes what already exists in a form the teacher UI can list.
+router.get('/homework/:id/submissions', authMiddleware, teacherOnly, (req, res) => {
+  try {
+    const hw = dbGet('SELECT * FROM homework WHERE id=?', [req.params.id])
+    if (!hw) return res.status(404).json({ error: 'Homework not found' })
+
+    const rows = dbAll(`
+      SELECT u.id as student_id, u.name as student_name, u.roll_no,
+        hs.id as submission_id, hs.attachment_url, hs.attachment_name,
+        hs.attachment_mime, hs.note, hs.submitted_at, hs.grade, hs.teacher_feedback
+      FROM users u
+      LEFT JOIN homework_submissions hs ON hs.homework_id=? AND hs.student_id=u.id
+      WHERE u.class_code=? AND u.role='student'
+      ORDER BY (hs.submitted_at IS NULL) ASC, CAST(u.roll_no as INTEGER), u.name
+    `, [req.params.id, hw.class_code])
+
+    const submissions = rows.map(r => ({
+      student_id:      r.student_id,
+      student_name:    r.student_name,
+      roll_no:         r.roll_no,
+      status:          r.submission_id ? 'submitted' : 'not_submitted',
+      submitted_at:    r.submitted_at || null,
+      note:            r.note || null,
+      attachment_url:  r.attachment_url || null,
+      attachment_name: r.attachment_name || null,
+      attachment_mime: r.attachment_mime || null,
+      grade:           r.grade || null,
+      teacher_feedback:r.teacher_feedback || null,
+    }))
+
+    res.json({
+      homework: { id: hw.id, title: hw.title, subject: hw.subject },
+      submissions,
+      submitted_count: submissions.filter(s => s.status === 'submitted').length,
+      total_students:  submissions.length,
+    })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
 router.put('/homework/:id/grade', authMiddleware, teacherOnly, (req, res) => {
   try {
     const { student_id, grade, feedback } = req.body
@@ -405,3 +450,5 @@ router.post('/report-card/:examId/open', authMiddleware, (req, res) => {
 })
 
 module.exports = router
+
+

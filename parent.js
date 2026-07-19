@@ -69,12 +69,21 @@ if (!student && parent.parent_code) {
 }
 
     const today   = new Date().toISOString().split('T')[0];
+    const dayName = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][new Date().getDay()];
+
+    // FIX (Fix #3 — Parent Daily Progress): the daily "on campus" total is
+    // tracked on the general session (period_number=0), same as the
+    // Student Dashboard and attendance.js's own /history route. The old
+    // query here used ORDER BY period_number LIMIT 1 with no WHERE on
+    // period_number, which is fragile the moment any period-specific
+    // session exists for the day — pin it to period_number=0 explicitly
+    // so Parent always matches Student exactly.
     const session = dbGet(
-      'SELECT * FROM attendance_sessions WHERE student_id=? AND date=? ORDER BY period_number LIMIT 1',
+      'SELECT * FROM attendance_sessions WHERE student_id=? AND date=? AND period_number=0',
       [student.id, today]
     );
     const history = dbAll(
-      'SELECT date,status,total_minutes FROM attendance_sessions WHERE student_id=? ORDER BY date DESC LIMIT 30',
+      'SELECT date,status,total_minutes FROM attendance_sessions WHERE student_id=? AND period_number=0 ORDER BY date DESC LIMIT 30',
       [student.id]
     );
     const present = history.filter(h => h.status === 'present').length;
@@ -88,6 +97,28 @@ if (!student && parent.parent_code) {
       [student.class_code]
     ) : [];
 
+    // FIX (Fix #3): today_periods — reuses the exact same
+    // periods-LEFT-JOIN-attendance_sessions pattern teacher.js already
+    // uses for its own dashboard period stats, just scoped to this one
+    // student instead of the whole class.
+    const todayPeriods = dbAll(`
+      SELECT p.period_number, p.subject, p.start_time, p.end_time,
+        COALESCE(s.status, 'absent') as status
+      FROM periods p
+      LEFT JOIN attendance_sessions s
+        ON s.period_number=p.period_number AND s.class_code=p.class_code
+        AND s.date=? AND s.student_id=?
+      WHERE p.class_code=? AND p.day=? AND p.period_number > 0
+      ORDER BY p.period_number
+    `, [today, student.id, student.class_code, dayName]);
+
+    // FIX (Fix #3): attendance_history — the day-by-day list the
+    // frontend already renders under History but was never being sent.
+    const attendanceHistory = dbAll(
+      'SELECT date, (status=?) as was_present, total_minutes FROM attendance_sessions WHERE student_id=? AND period_number=0 ORDER BY date DESC LIMIT 30',
+      ['present', student.id]
+    );
+
     res.json({
       child: {
         id: student.id, name: student.name, email: student.email,
@@ -95,7 +126,9 @@ if (!student && parent.parent_code) {
         class_code: student.class_code, unique_code: student.unique_code
       },
       today: { session: session || null, status: session?.status || 'absent' },
+      today_periods: todayPeriods,
       attendance: { total: history.length, present, percentage: pct, warning: pct < 75 },
+      attendance_history: attendanceHistory,
       leave_requests: leaves,
       notices
     });
@@ -138,3 +171,4 @@ router.get('/homework-status', authMiddleware, (req, res) => {
 });
 
 module.exports = router;
+
